@@ -1,205 +1,242 @@
 import json
-import logging
+import openai
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI
 
-logger = logging.getLogger(__name__)
+from config.settings import settings
 
-
-class LLMUpdater:
-    def __init__(self, api_key: str):
-        self.client = AsyncOpenAI(api_key=api_key)
-        self.model = "gpt-4"
-
-    def create_recommendation_prompt(self, input_text: str, existing_item: Optional[Dict]) -> str:
-        """Create a structured prompt for generating recommendations."""
+def call_azure_openai_llm(prompt: str) -> str:
+    """Call Azure OpenAI API for LLM response"""
+    if not settings.AZURE_OPENAI_API_KEY:
+        raise ValueError("AZURE_OPENAI_API_KEY not found")
+    if not settings.AZURE_OPENAI_ENDPOINT:
+        raise ValueError("AZURE_OPENAI_ENDPOINT not found")
         
-        if existing_item:
-            existing_section = f"""
-EXISTING SIMILAR KNOWLEDGE:
-Category: {existing_item.get('category', 'N/A')}
-Content: {existing_item.get('content', 'N/A')}
-Tags: {', '.join(existing_item.get('tags', []))}
-Similarity Score: {existing_item.get('similarity_score', 'N/A'):.3f}
-"""
-        else:
-            existing_section = "EXISTING SIMILAR KNOWLEDGE: None found"
+    # Configure Azure OpenAI client
+    client = openai.AzureOpenAI(
+        api_key=settings.AZURE_OPENAI_API_KEY,
+        api_version=settings.AZURE_OPENAI_API_VERSION,
+        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
+    )
+    
+    response = client.chat.completions.create(
+        model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that manages knowledge databases. Always respond with valid JSON and generate meaningful, descriptive tags for content."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.7
+    )
+    
+    return response.choices[0].message.content
 
-        prompt = f"""You are helping manage a MECE (Mutually Exclusive, Collectively Exhaustive) knowledge database.
+def generate_fallback_recommendations(input_text: str, existing_item: Optional[Dict]) -> List[Dict]:
+    """Generate simple fallback recommendations if LLM fails"""
+    from .embeddings import get_embedding
+    
+    recommendations = []
+    
+    # Generate basic content-based tags as fallback
+    def generate_basic_tags(text: str) -> List[str]:
+        """Generate basic tags from text content"""
+        text_lower = text.lower()
+        
+        # Common topic keywords to look for
+        tag_keywords = {
+            'ai': ['artificial intelligence', 'ai', 'machine learning', 'ml', 'neural', 'algorithm'],
+            'business': ['business', 'strategy', 'marketing', 'finance', 'revenue', 'profit'],
+            'technology': ['technology', 'tech', 'software', 'programming', 'coding', 'development'],
+            'health': ['health', 'medical', 'wellness', 'fitness', 'exercise', 'nutrition'],
+            'education': ['education', 'learning', 'study', 'teaching', 'knowledge', 'training'],
+            'science': ['science', 'research', 'experiment', 'hypothesis', 'theory', 'analysis'],
+            'psychology': ['psychology', 'behavior', 'cognitive', 'mental', 'emotion', 'mind'],
+            'economics': ['economics', 'economic', 'market', 'economy', 'financial', 'investment']
+        }
+        
+        tags = []
+        for tag, keywords in tag_keywords.items():
+            if any(keyword in text_lower for keyword in keywords):
+                tags.append(tag)
+        
+        # Add generic tags if no specific ones found
+        if not tags:
+            if len(text) > 500:
+                tags.append('detailed')
+            tags.append('knowledge')
+        
+        return tags[:5]  # Limit to 5 tags max
+    
+    if existing_item:
+        # Option 1: Merge with existing
+        merged_content = f"{existing_item['content']}\n\n[ADDITION]: {input_text}"
+        recommendations.append({
+            "change": f"We merged your new information with the existing '{existing_item['category']}' category by appending it to the current content.",
+            "updated_text": merged_content,
+            "category": existing_item['category'],
+            "tags": existing_item.get('tags', []) + ['updated'] + generate_basic_tags(input_text)
+        })
+        
+        # Option 2: Replace existing
+        recommendations.append({
+            "change": f"We updated the '{existing_item['category']}' category by replacing the content with your new, more comprehensive information.",
+            "updated_text": input_text,
+            "category": existing_item['category'],
+            "tags": generate_basic_tags(input_text) + ['updated']
+        })
+    else:
+        # If no existing item, create new category options
+        recommendations.append({
+            "change": "We created a new category since no similar content was found in your database.",
+            "updated_text": input_text,
+            "category": "New Knowledge Category",
+            "tags": generate_basic_tags(input_text) + ['new']
+        })
+        
+        recommendations.append({
+            "change": "We created a new category with enhanced formatting for better readability.",
+            "updated_text": f"# Overview\n{input_text}",
+            "category": "New Knowledge Category",
+            "tags": generate_basic_tags(input_text) + ['formatted', 'new']
+        })
+    
+    # Option 3: Always offer new category
+    recommendations.append({
+        "change": "We recommend creating a completely new category to keep this information separate and distinct.",
+        "updated_text": input_text,
+        "category": "New Category",
+        "tags": generate_basic_tags(input_text) + ['new', 'distinct']
+    })
+    
+    return recommendations
+
+def LLMUpdater(input_text: str, existing_item: Optional[Dict], llm_type: str = "azure_openai") -> List[Dict]:
+    """
+    Generate 3 recommendation options for updating knowledge using Azure OpenAI
+    Now includes intelligent tag generation based on content analysis
+    
+    Args:
+        input_text: New text to process
+        existing_item: Most similar existing knowledge item (or None if no match)
+        llm_type: Must be "azure_openai" (only supported option)
+        
+    Returns:
+        List of 3 recommendation dictionaries with structure:
+        {
+            "change": "explanation of what we did",
+            "updated_text": "the combined/revised text", 
+            "category": "category name",
+            "tags": ["tag1", "tag2", "tag3"]  # Now includes meaningful tags
+        }
+    """
+    
+    if existing_item:
+        existing_text = existing_item['content']
+        existing_category = existing_item['category']
+        existing_tags = existing_item.get('tags', [])
+        similarity_score = existing_item.get('similarity_score', 0)
+    else:
+        existing_text = ""
+        existing_category = ""
+        existing_tags = []
+        similarity_score = 0
+    
+    # Construct the enhanced LLM prompt with tag generation
+    prompt = f"""You are helping manage a MECE (Mutually Exclusive, Collectively Exhaustive) knowledge database.
 
 INPUT TEXT: {input_text}
 
-{existing_section}
+EXISTING SIMILAR KNOWLEDGE:
+Category: {existing_category}
+Content: {existing_text}
+Existing Tags: {existing_tags}
+Similarity Score: {similarity_score:.3f}
 
-Please provide exactly 3 different recommendations for how to handle this new information. Each recommendation should follow a different strategic approach:
-
-1. **Merge/Update Approach**: How to combine with existing knowledge (if any exists)
-2. **Replace/Revise Approach**: How to improve or replace existing content (if any exists)  
-3. **New Category Approach**: Create a separate new category for this information
+Please provide exactly 3 different recommendations for how to handle this new information. Each recommendation should be a different approach (merge, replace, new category, etc.).
 
 For each recommendation, provide:
-- Clear explanation of what changes would be made
-- Complete updated/new text content (well-formatted and comprehensive)
-- Appropriate category name (descriptive and specific)
-- 3-5 relevant content-based tags (focus on key concepts and topics)
-- A brief preview/summary of the content
-- Ensure MECE principles are maintained
+1. A clear explanation of what changes you're making and why
+2. The complete updated/new text content
+3. The appropriate category name
+4. **IMPORTANT**: Generate 3 relevant, descriptive tags based on the content topics, themes, and subject matter
 
-CRITICAL: Respond with ONLY a valid JSON array containing exactly 3 objects. Each object must have these exact keys:
-- "change": string explaining the approach
-- "updated_text": string with complete content
-- "category": string with category name
-- "tags": array of strings (3-5 tags)
-- "preview": string with brief summary
+Tags should be:
+- Descriptive of the actual content (e.g., "machine-learning", "business-strategy", "health-tips")
+- Lowercase with hyphens for multi-word tags
+- Relevant to the subject matter and themes
+- Useful for searching and categorizing
+- NOT generic words like "updated", "new", "knowledge" unless specifically relevant
+
+Example good tags: ["artificial-intelligence", "productivity", "learning-techniques", "data-analysis", "health-optimization"]
+Example bad tags: ["updated", "new", "text", "content", "information"]
+
+Format your response as a JSON array with 3 objects, each having these exact keys:
+- "change": explanation of what you did
+- "updated_text": the complete text content
+- "category": the category name
+- "tags": array of 3 descriptive tags
 
 Example format:
 [
   {{
-    "change": "Detailed explanation of the merge approach...",
+    "change": "We noticed you already have similar content about X. We merged the new information with your existing knowledge, highlighting the new insights about Y.",
     "updated_text": "Complete merged content here...",
-    "category": "Specific Category Name",
-    "tags": ["tag1", "tag2", "tag3", "tag4"],
-    "preview": "Brief summary of the merged content..."
+    "category": "Existing Category Name",
+    "tags": ["topic-name", "subject-area", "key-theme", "methodology"]
   }},
-  ... (2 more objects)
+  {{
+    "change": "We created a more comprehensive version by restructuring your existing content and integrating the new information to improve clarity.",
+    "updated_text": "Restructured content here...",
+    "category": "Existing Category Name", 
+    "tags": ["topic-name", "subject-area", "comprehensive-guide", "structured-learning"]
+  }},
+  {{
+    "change": "We recommend creating a new category since this information represents a distinct concept that doesn't fit well with your existing knowledge.",
+    "updated_text": "New content here...",
+    "category": "New Category Name",
+    "tags": ["new-topic", "distinct-concept", "specialized-knowledge"]
+  }}
 ]
 
-Respond with JSON only, no additional text or formatting."""
+Ensure the JSON is valid and complete. Focus on generating meaningful, searchable tags that describe the actual content topics."""
 
-        return prompt
-
-    async def LLMUpdater(self, input_text: str, existing_item: Optional[Dict], 
-                        llm_type: str = "openai") -> List[Dict]:
-        """
-        Generate 3 AI-powered recommendations for handling input text.
+    try:
+        if llm_type.lower() != "azure_openai":
+            raise ValueError(f"Unsupported LLM type: {llm_type}. Only 'azure_openai' is supported.")
         
-        Args:
-            input_text: New text to process
-            existing_item: Most similar existing knowledge item (if any)
-            llm_type: LLM provider (currently only "openai" supported)
-            
-        Returns:
-            List of 3 recommendation dictionaries
-        """
-        try:
-            if llm_type != "openai":
-                raise ValueError(f"Unsupported LLM type: {llm_type}")
-
-            # Create prompt
-            prompt = self.create_recommendation_prompt(input_text, existing_item)
-            
-            logger.info("Generating LLM recommendations...")
-            
-            # Call OpenAI GPT-4
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert knowledge management assistant. Always respond with valid JSON only."
-                    },
-                    {
-                        "role": "user", 
-                        "content": prompt
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=2000
-            )
-            
-            # Parse response
-            content = response.choices[0].message.content.strip()
-            
-            # Clean up potential markdown formatting
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-            
-            # Parse JSON
-            try:
-                recommendations = json.loads(content)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse LLM response as JSON: {e}")
-                logger.error(f"Raw response: {content}")
-                raise Exception("LLM returned invalid JSON format")
-            
-            # Validate response structure
-            if not isinstance(recommendations, list):
-                raise Exception("LLM response must be a JSON array")
-            
-            if len(recommendations) != 3:
-                raise Exception(f"Expected 3 recommendations, got {len(recommendations)}")
-            
-            # Validate each recommendation
-            required_keys = ["change", "updated_text", "category", "tags", "preview"]
-            for i, rec in enumerate(recommendations):
-                if not isinstance(rec, dict):
-                    raise Exception(f"Recommendation {i+1} must be an object")
-                
-                for key in required_keys:
-                    if key not in rec:
-                        raise Exception(f"Recommendation {i+1} missing required key: {key}")
-                
-                # Ensure tags is a list
-                if not isinstance(rec["tags"], list):
-                    raise Exception(f"Recommendation {i+1} 'tags' must be an array")
-                
-                # Add option number
-                rec["option_number"] = i + 1
-            
-            logger.info(f"Successfully generated {len(recommendations)} recommendations")
-            return recommendations
-            
-        except Exception as e:
-            logger.error(f"LLMUpdater failed: {e}")
-            
-            # Return fallback recommendations if LLM fails
-            fallback_recommendations = self.create_fallback_recommendations(input_text, existing_item)
-            logger.warning("Using fallback recommendations due to LLM failure")
-            return fallback_recommendations
-
-    def create_fallback_recommendations(self, input_text: str, existing_item: Optional[Dict]) -> List[Dict]:
-        """Create basic fallback recommendations if LLM fails."""
+        response = call_azure_openai_llm(prompt)
         
-        # Generate basic category name from first few words
-        words = input_text.split()[:3]
-        basic_category = " ".join(words).title() if words else "General Knowledge"
+        # Parse the JSON response
+        recommendations = json.loads(response)
         
-        # Generate basic tags from input text
-        common_words = [word.lower().strip('.,!?;:') for word in input_text.split() 
-                       if len(word) > 3 and word.lower() not in ['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'she', 'use', 'your', 'said', 'each', 'make', 'most', 'over', 'said', 'some', 'time', 'very', 'when', 'come', 'here', 'just', 'like', 'long', 'make', 'many', 'over', 'such', 'take', 'than', 'them', 'well', 'were']]
-        basic_tags = list(set(common_words[:5]))
+        # Validate that we have exactly 3 recommendations
+        if len(recommendations) != 3:
+            raise ValueError("LLM didn't return exactly 3 recommendations")
         
-        if len(basic_tags) < 3:
-            basic_tags.extend(['knowledge', 'information', 'data'])
+        # Validate and clean up the structure
+        for i, rec in enumerate(recommendations):
+            required_keys = ["change", "updated_text", "category", "tags"]
+            for key in required_keys:
+                if key not in rec:
+                    raise ValueError(f"Recommendation {i+1} missing required key: {key}")
+            
+            # Ensure tags is a list
+            if not isinstance(rec['tags'], list):
+                rec['tags'] = [rec['tags']] if rec['tags'] else []
+            
+            # Clean up tags - remove empty strings and ensure they're strings
+            rec['tags'] = [str(tag).strip().lower() for tag in rec['tags'] if str(tag).strip()]
+            
+            # Limit to 5 tags max
+            rec['tags'] = rec['tags'][:5]
+            
+            # If no tags generated, add some basic ones
+            if not rec['tags']:
+                rec['tags'] = ['knowledge', 'general']
         
-        recommendations = [
-            {
-                "option_number": 1,
-                "change": "Store as new knowledge item with automatic categorization",
-                "updated_text": input_text,
-                "category": basic_category,
-                "tags": basic_tags[:4],
-                "preview": input_text[:100] + "..." if len(input_text) > 100 else input_text
-            },
-            {
-                "option_number": 2,
-                "change": "Create comprehensive knowledge entry with enhanced formatting",
-                "updated_text": f"# {basic_category}\n\n{input_text}\n\n*Added to knowledge base for future reference.*",
-                "category": f"Enhanced {basic_category}",
-                "tags": basic_tags[:4] + ["enhanced"],
-                "preview": f"Enhanced entry for {basic_category} with structured formatting"
-            },
-            {
-                "option_number": 3,
-                "change": "Store with general classification for broad accessibility",
-                "updated_text": input_text,
-                "category": "General Knowledge",
-                "tags": ["general", "uncategorized"] + basic_tags[:3],
-                "preview": "General knowledge entry for later categorization and refinement"
-            }
-        ]
-        
+        print(f"✅ Generated {len(recommendations)} recommendations with tags")
         return recommendations
+        
+    except Exception as e:
+        print(f"Error calling Azure OpenAI LLM: {e}")
+        print("Falling back to simple recommendations with basic tag generation")
+        # Fallback to simple recommendations with basic tag generation
+        return generate_fallback_recommendations(input_text, existing_item)
