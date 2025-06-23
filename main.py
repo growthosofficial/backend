@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from models import (
     ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
     KnowledgeItemCreate, KnowledgeItemUpdate, KnowledgeItemResponse,
-    HealthResponse, StatsResponse, ErrorResponse
+    HealthResponse, StatsResponse, ErrorResponse, CategoriesResponse, CategoryResponse
 )
 from database import DatabaseManager
 from core.embeddings import EmbeddingService
@@ -24,6 +24,7 @@ from utils.helpers import (
     safe_json_loads, safe_json_dumps, extract_preview, 
     create_error_response, log_api_call, clean_text_input
 )
+from src.utils.category_mapping import get_main_category, get_all_main_categories
 
 # Load environment variables
 load_dotenv()
@@ -77,8 +78,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Second Brain Knowledge Management API",
-    description="AI-powered knowledge management system with semantic similarity and intelligent recommendations",
-    version="1.0.0",
+    description="AI-powered knowledge management system with two-tier categorization and semantic similarity",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -186,7 +187,7 @@ async def process_text(
     similarity: SemanticSimilarityCore = Depends(get_similarity_core),
     llm: LLMUpdater = Depends(get_llm_updater)
 ):
-    """Main text processing endpoint."""
+    """Main text processing endpoint with two-tier categorization."""
     start_time = datetime.now()
     
     try:
@@ -206,14 +207,15 @@ async def process_text(
         # 3. Generate 3 AI recommendations (LLMUpdater function)
         recommendations_data = await llm.LLMUpdater(cleaned_text, similar_item)
         
-        # 4. Format recommendations
+        # 4. Format recommendations with two-tier categorization
         recommendations = []
-        for i, rec_data in enumerate(recommendations_data):
+        for rec_data in recommendations_data:
             recommendation = RecommendationResponse(
-                option_number=rec_data.get("option_number", i + 1),
+                option_number=rec_data.get("option_number", len(recommendations) + 1),
                 change=rec_data["change"],
                 updated_text=rec_data["updated_text"],
-                category=rec_data["category"],
+                main_category=rec_data["main_category"],
+                sub_category=rec_data["sub_category"],
                 tags=rec_data["tags"],
                 preview=rec_data["preview"]
             )
@@ -222,8 +224,9 @@ async def process_text(
         # 5. Create response
         response = ProcessTextResponse(
             recommendations=recommendations,
-            similar_category=similar_item["category"] if similar_item else None,
-            similarity_score=similar_item["similarity_score"] if similar_item else None,
+            similar_main_category=similar_item.get("main_category") if similar_item else None,
+            similar_sub_category=similar_item.get("sub_category") if similar_item else None,
+            similarity_score=similar_item.get("similarity_score") if similar_item else None,
             status="success"
         )
         
@@ -242,49 +245,77 @@ async def process_text(
         raise HTTPException(status_code=500, detail=f"Text processing failed: {str(e)}")
 
 
-@app.get("/api/categories")
+@app.get("/api/categories", response_model=CategoriesResponse)
 async def get_categories(db: DatabaseManager = Depends(get_db_manager)):
-    """Get all knowledge categories with metadata."""
+    """Get all knowledge categories grouped by main category."""
     start_time = datetime.now()
     
     try:
         items = db.get_all_knowledge_items()
         
-        categories = {}
+        # Group by main category
+        main_categories = {}
+        total_items = 0
+        
         for item in items:
-            if item.category not in categories:
-                categories[item.category] = {
-                    "category": item.category,
-                    "items": [],
+            # Handle backward compatibility
+            main_cat = getattr(item, 'main_category', None)
+            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
+            
+            if not main_cat:
+                main_cat = get_main_category(sub_cat)
+            
+            if main_cat not in main_categories:
+                main_categories[main_cat] = {
+                    "main_category": main_cat,
+                    "sub_categories": [],
                     "total_items": 0,
                     "last_updated": None
                 }
             
             # Parse tags
-            tags = safe_json_loads(item.tags, [])
+            tags = safe_json_loads(getattr(item, 'tags', '[]'), [])
             
-            item_data = {
+            sub_cat_data = {
                 "id": item.id,
+                "sub_category": sub_cat,
                 "content": item.content,
                 "tags": tags,
                 "created_at": item.created_at.isoformat(),
                 "last_updated": item.last_updated.isoformat()
             }
             
-            categories[item.category]["items"].append(item_data)
-            categories[item.category]["total_items"] += 1
+            main_categories[main_cat]["sub_categories"].append(sub_cat_data)
+            main_categories[main_cat]["total_items"] += 1
+            total_items += 1
             
             # Update last_updated
-            if (categories[item.category]["last_updated"] is None or 
-                item.last_updated > datetime.fromisoformat(categories[item.category]["last_updated"])):
-                categories[item.category]["last_updated"] = item.last_updated.isoformat()
+            if (main_categories[main_cat]["last_updated"] is None or 
+                item.last_updated > datetime.fromisoformat(main_categories[main_cat]["last_updated"])):
+                main_categories[main_cat]["last_updated"] = item.last_updated.isoformat()
         
-        result = list(categories.values())
+        # Convert to response format
+        categories = []
+        for main_cat_data in main_categories.values():
+            category_response = CategoryResponse(
+                main_category=main_cat_data["main_category"],
+                sub_categories=main_cat_data["sub_categories"],
+                total_items=main_cat_data["total_items"],
+                last_updated=datetime.fromisoformat(main_cat_data["last_updated"]) if main_cat_data["last_updated"] else None
+            )
+            categories.append(category_response)
+        
+        response = CategoriesResponse(
+            categories=categories,
+            total_main_categories=len(categories),
+            total_sub_categories=sum(len(cat.sub_categories) for cat in categories),
+            total_items=total_items
+        )
         
         duration = (datetime.now() - start_time).total_seconds()
         log_api_call("/api/categories", "GET", 200, duration)
         
-        return {"categories": result, "total_categories": len(result)}
+        return response
         
     except Exception as e:
         logger.error(f"Failed to get categories: {e}")
@@ -293,15 +324,82 @@ async def get_categories(db: DatabaseManager = Depends(get_db_manager)):
         raise HTTPException(status_code=500, detail=f"Failed to get categories: {str(e)}")
 
 
-@app.get("/api/stats", response_model=StatsResponse)
-async def get_stats(db: DatabaseManager = Depends(get_db_manager)):
-    """Get database statistics."""
+@app.get("/api/main-categories")
+async def get_main_categories():
+    """Get list of all available main categories."""
     start_time = datetime.now()
     
     try:
-        stats = db.get_stats()
+        main_categories = get_all_main_categories()
         
-        response = StatsResponse(**stats)
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/main-categories", "GET", 200, duration)
+        
+        return {
+            "main_categories": main_categories,
+            "total_count": len(main_categories)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get main categories: {e}")
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/main-categories", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get main categories: {str(e)}")
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+async def get_stats(db: DatabaseManager = Depends(get_db_manager)):
+    """Get database statistics with two-tier categorization."""
+    start_time = datetime.now()
+    
+    try:
+        items = db.get_all_knowledge_items()
+        
+        # Collect statistics
+        main_categories = set()
+        sub_categories = set()
+        all_tags = []
+        main_category_counts = {}
+        latest_update = None
+        
+        for item in items:
+            # Handle backward compatibility
+            main_cat = getattr(item, 'main_category', None)
+            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
+            
+            if not main_cat:
+                main_cat = get_main_category(sub_cat)
+            
+            main_categories.add(main_cat)
+            sub_categories.add(sub_cat)
+            
+            # Count main categories
+            main_category_counts[main_cat] = main_category_counts.get(main_cat, 0) + 1
+            
+            # Collect tags
+            tags = safe_json_loads(getattr(item, 'tags', '[]'), [])
+            all_tags.extend(tags)
+            
+            # Track latest update
+            if latest_update is None or item.last_updated > latest_update:
+                latest_update = item.last_updated
+        
+        # Count tag frequencies
+        tag_counts = {}
+        for tag in all_tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        
+        most_common_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        response = StatsResponse(
+            total_items=len(items),
+            unique_main_categories=len(main_categories),
+            unique_sub_categories=len(sub_categories),
+            unique_tags=len(set(all_tags)),
+            latest_update=latest_update,
+            main_category_distribution=main_category_counts,
+            most_common_tags=most_common_tags
+        )
         
         duration = (datetime.now() - start_time).total_seconds()
         log_api_call("/api/stats", "GET", 200, duration)
@@ -321,7 +419,7 @@ async def create_knowledge_item(
     db: DatabaseManager = Depends(get_db_manager),
     embeddings: EmbeddingService = Depends(get_embedding_service)
 ):
-    """Create a new knowledge item."""
+    """Create a new knowledge item with two-tier categorization."""
     start_time = datetime.now()
     
     try:
@@ -330,12 +428,18 @@ async def create_knowledge_item(
         if not cleaned_content:
             raise HTTPException(status_code=400, detail="Content cannot be empty")
         
+        # Ensure main_category is set
+        main_category = item.main_category
+        if not main_category:
+            main_category = get_main_category(item.sub_category)
+        
         # Generate embedding
         embedding = await embeddings.get_embedding(cleaned_content)
         
         # Create item in database
         db_item = db.create_knowledge_item(
-            category=item.category,
+            main_category=main_category,
+            sub_category=item.sub_category,
             content=cleaned_content,
             tags=item.tags,
             embedding=embedding
@@ -344,7 +448,8 @@ async def create_knowledge_item(
         # Format response
         response = KnowledgeItemResponse(
             id=db_item.id,
-            category=db_item.category,
+            main_category=main_category,
+            sub_category=item.sub_category,
             content=db_item.content,
             tags=safe_json_loads(db_item.tags, []),
             created_at=db_item.created_at,
@@ -354,7 +459,7 @@ async def create_knowledge_item(
         duration = (datetime.now() - start_time).total_seconds()
         log_api_call("/api/knowledge", "POST", 201, duration)
         
-        logger.info(f"Created knowledge item with ID: {db_item.id}")
+        logger.info(f"Created knowledge item with ID: {db_item.id} (Main: {main_category}, Sub: {item.sub_category})")
         return response
         
     except HTTPException:
@@ -368,7 +473,7 @@ async def create_knowledge_item(
 
 @app.get("/api/knowledge")
 async def get_all_knowledge(db: DatabaseManager = Depends(get_db_manager)):
-    """Get all knowledge items."""
+    """Get all knowledge items with two-tier categorization."""
     start_time = datetime.now()
     
     try:
@@ -376,11 +481,19 @@ async def get_all_knowledge(db: DatabaseManager = Depends(get_db_manager)):
         
         result = []
         for item in items:
+            # Handle backward compatibility
+            main_cat = getattr(item, 'main_category', None)
+            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
+            
+            if not main_cat:
+                main_cat = get_main_category(sub_cat)
+            
             item_data = {
                 "id": item.id,
-                "category": item.category,
+                "main_category": main_cat,
+                "sub_category": sub_cat,
                 "content": item.content,
-                "tags": safe_json_loads(item.tags, []),
+                "tags": safe_json_loads(getattr(item, 'tags', '[]'), []),
                 "created_at": item.created_at.isoformat(),
                 "last_updated": item.last_updated.isoformat()
             }
@@ -405,7 +518,7 @@ async def update_knowledge_item(
     db: DatabaseManager = Depends(get_db_manager),
     embeddings: EmbeddingService = Depends(get_embedding_service)
 ):
-    """Update existing knowledge item."""
+    """Update existing knowledge item with two-tier categorization."""
     start_time = datetime.now()
     
     try:
@@ -418,8 +531,14 @@ async def update_knowledge_item(
         update_data = {}
         new_embedding = None
         
-        if item.category is not None:
-            update_data["category"] = item.category
+        if item.sub_category is not None:
+            update_data["sub_category"] = item.sub_category
+            # Auto-determine main_category if not explicitly provided
+            if item.main_category is None:
+                update_data["main_category"] = get_main_category(item.sub_category)
+        
+        if item.main_category is not None:
+            update_data["main_category"] = item.main_category
         
         if item.content is not None:
             cleaned_content = clean_text_input(item.content)
@@ -436,7 +555,8 @@ async def update_knowledge_item(
         # Update item in database
         updated_item = db.update_knowledge_item(
             item_id=item_id,
-            category=update_data.get("category"),
+            main_category=update_data.get("main_category"),
+            sub_category=update_data.get("sub_category"),
             content=update_data.get("content"),
             tags=update_data.get("tags"),
             embedding=new_embedding
@@ -448,7 +568,8 @@ async def update_knowledge_item(
         # Format response
         response = KnowledgeItemResponse(
             id=updated_item.id,
-            category=updated_item.category,
+            main_category=getattr(updated_item, 'main_category', get_main_category(getattr(updated_item, 'sub_category', 'unknown'))),
+            sub_category=getattr(updated_item, 'sub_category', getattr(updated_item, 'category', 'unknown')),
             content=updated_item.content,
             tags=safe_json_loads(updated_item.tags, []),
             created_at=updated_item.created_at,
@@ -504,6 +625,7 @@ if __name__ == "__main__":
     port = int(os.getenv("API_PORT", 8000))
     
     logger.info(f"Starting FastAPI server on {host}:{port}")
+    logger.info("Two-tier categorization system enabled")
     
     uvicorn.run(
         "main:app",

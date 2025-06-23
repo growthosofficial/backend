@@ -18,6 +18,7 @@ def SSC(text: str, threshold: float, database_folder: str = None) -> Optional[Di
         
     Returns:
         Most similar knowledge item with similarity score, or None if no match above threshold
+        Now includes both main_category and sub_category
     """
     text_embedding = get_embedding(text)
     emb1 = np.array(text_embedding).reshape(1, -1)
@@ -46,5 +47,13 @@ def SSC(text: str, threshold: float, database_folder: str = None) -> Optional[Di
             highest_similarity = similarity
             best_match = knowledge_item.copy()
             best_match['similarity_score'] = float(similarity)
+            
+            # Ensure backward compatibility - if old 'category' field exists, map it to sub_category
+            if 'category' in best_match and 'sub_category' not in best_match:
+                best_match['sub_category'] = best_match['category']
+                # Try to determine main_category if not present
+                if 'main_category' not in best_match:
+                    from utils.category_mapping import get_main_category
+                    best_match['main_category'] = get_main_category(best_match['category'])
     
     return best_match

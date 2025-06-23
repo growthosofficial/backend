@@ -6,6 +6,7 @@ from core.embeddings import get_embedding
 from database.supabase_manager import supabase_manager
 from processing.file_handler import read_input_from_file
 from config.settings import settings
+from utils.category_mapping import get_main_category
 
 def process_input_text(
     input_text: str, 
@@ -15,6 +16,7 @@ def process_input_text(
 ) -> None:
     """
     Process input text through the similarity checking and update pipeline using Supabase
+    Now supports two-tier categorization system
     
     Args:
         input_text: Text to process
@@ -39,7 +41,9 @@ def process_input_text(
     most_similar = SSC(input_text, similarity_threshold)
     
     if most_similar:
-        print(f"Most similar category: '{most_similar['category']}' (similarity: {most_similar['similarity_score']:.3f})")
+        main_cat = most_similar.get('main_category', 'Unknown')
+        sub_cat = most_similar.get('sub_category', most_similar.get('category', 'Unknown'))
+        print(f"Most similar: '{sub_cat}' (Main: {main_cat}) - similarity: {most_similar['similarity_score']:.3f}")
     else:
         print("No similar category found above threshold.")
     
@@ -47,11 +51,12 @@ def process_input_text(
     print(f"Getting recommendations from {llm_type.upper()}...")
     recommendations = LLMUpdater(input_text, most_similar, llm_type)
     
-    # Display options to user
+    # Display options to user with two-tier categorization
     print("\nRecommendations:")
     for i, rec in enumerate(recommendations, 1):
         print(f"\n{i}: {rec['change']}")
-        print(f"   Category: {rec['category']}")
+        print(f"   Main Category: {rec['main_category']}")
+        print(f"   Sub-Category: {rec['sub_category']}")
         print(f"   Preview: {rec['updated_text'][:100]}...")
     
     # Get user decision
@@ -63,18 +68,20 @@ def process_input_text(
         if 1 <= option_num <= 3:
             selected_rec = recommendations[option_num - 1]
             
-            # Create complete knowledge item
+            # Create complete knowledge item with two-tier categorization
             knowledge_item = {
-                'category': selected_rec['category'],
+                'main_category': selected_rec['main_category'],
+                'sub_category': selected_rec['sub_category'],
                 'content': selected_rec['updated_text'],
-                'tags': ['updated'] if most_similar else ['new'],
+                'tags': selected_rec.get('tags', ['updated'] if most_similar else ['new']),
                 'embedding': get_embedding(selected_rec['updated_text'])
             }
             
             # Add/update the knowledge item in Supabase
             result = supabase_manager.add_knowledge_item(knowledge_item)
             print(f"✅ Applied recommendation {option_num}")
-            print(f"📁 Updated category: {selected_rec['category']}")
+            print(f"📁 Main Category: {selected_rec['main_category']}")
+            print(f"📂 Sub-Category: {selected_rec['sub_category']}")
             print(f"🆔 Record ID: {result.get('id') if result else 'Unknown'}")
         else:
             print("Invalid option number (1-3)")
@@ -89,6 +96,7 @@ def process_file_input(
 ) -> None:
     """
     Process input text from a file through the similarity checking and update pipeline
+    Now supports two-tier categorization system
     
     Args:
         file_path: Path to the .txt file containing input text
