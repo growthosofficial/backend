@@ -1,30 +1,45 @@
+"""
+Read-Only FastAPI application for Second Brain Knowledge Management System
+Focuses on data retrieval and AI-powered recommendation generation
+Frontend handles all database updates
+"""
 import os
+import sys
 import logging
 import json
 from datetime import datetime
 from typing import List, Optional
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from models import (
-    ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
-    KnowledgeItemCreate, KnowledgeItemUpdate, KnowledgeItemResponse,
-    HealthResponse, StatsResponse, ErrorResponse, CategoriesResponse, CategoryResponse
-)
-from database import DatabaseManager
-from core.embeddings import EmbeddingService
-from core.similarity import SemanticSimilarityCore
-from core.llm_updater import LLMUpdater
-from utils.helpers import (
-    safe_json_loads, safe_json_dumps, extract_preview, 
-    create_error_response, log_api_call, clean_text_input
-)
-from src.utils.category_mapping import get_main_category, get_all_main_categories
+# Add src directory to path for imports
+current_dir = Path(__file__).parent
+src_dir = current_dir / "src"
+sys.path.insert(0, str(src_dir))
+
+try:
+    from models import (
+        ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
+        KnowledgeItemResponse, CategoryResponse, CategoriesResponse,
+        HealthResponse, StatsResponse, StrengthDistributionResponse, 
+        CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse
+    )
+    from config.settings import settings
+    from core.similarity import SSC
+    from core.llm_updater import LLMUpdater
+    from database.supabase_manager import supabase_manager
+    from utils.category_mapping import get_all_subject_categories
+    from utils.helpers import log_api_call, create_error_response
+except ImportError as e:
+    print(f"Import error: {e}")
+    print("Make sure you're running from the correct directory and all dependencies are installed")
+    raise
 
 # Load environment variables
 load_dotenv()
@@ -36,34 +51,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global variables
-db_manager: DatabaseManager = None
-embedding_service: EmbeddingService = None
-similarity_core: SemanticSimilarityCore = None
-llm_updater: LLMUpdater = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
-    global db_manager, embedding_service, similarity_core, llm_updater
-    
     try:
-        # Initialize database
-        database_url = os.getenv("DATABASE_URL", "sqlite:///knowledge.db")
-        db_manager = DatabaseManager(database_url)
-        logger.info("Database initialized successfully")
+        # Validate settings
+        settings.validate()
+        logger.info("Configuration validated successfully")
         
-        # Initialize OpenAI services
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
+        # Test Supabase connection
+        stats = supabase_manager.get_database_stats()
+        logger.info(f"Supabase connected - {stats['total_knowledge_items']} items available for analysis")
         
-        embedding_service = EmbeddingService(openai_api_key)
-        similarity_core = SemanticSimilarityCore(db_manager)
-        llm_updater = LLMUpdater(openai_api_key)
-        
-        logger.info("All services initialized successfully")
+        logger.info("✅ Read-only knowledge analysis system initialized")
         
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
@@ -71,16 +72,18 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup (if needed)
+    # Cleanup
     logger.info("Application shutdown")
 
 
 # Create FastAPI app
 app = FastAPI(
-    title="Second Brain Knowledge Management API",
-    description="AI-powered knowledge management system with two-tier categorization and semantic similarity",
+    title="Second Brain Knowledge Analysis API",
+    description="Read-only AI-powered knowledge analysis and recommendation system. Frontend handles database updates.",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # Configure CORS
@@ -94,37 +97,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],  # Only GET and POST for read-only + recommendations
     allow_headers=["*"],
 )
-
-
-def get_db_manager() -> DatabaseManager:
-    """Dependency to get database manager."""
-    if db_manager is None:
-        raise HTTPException(status_code=500, detail="Database not initialized")
-    return db_manager
-
-
-def get_embedding_service() -> EmbeddingService:
-    """Dependency to get embedding service."""
-    if embedding_service is None:
-        raise HTTPException(status_code=500, detail="Embedding service not initialized")
-    return embedding_service
-
-
-def get_similarity_core() -> SemanticSimilarityCore:
-    """Dependency to get similarity core."""
-    if similarity_core is None:
-        raise HTTPException(status_code=500, detail="Similarity core not initialized")
-    return similarity_core
-
-
-def get_llm_updater() -> LLMUpdater:
-    """Dependency to get LLM updater."""
-    if llm_updater is None:
-        raise HTTPException(status_code=500, detail="LLM updater not initialized")
-    return llm_updater
 
 
 @app.exception_handler(Exception)
@@ -140,22 +115,40 @@ async def global_exception_handler(request, exc):
     )
 
 
-@app.get("/health", response_model=HealthResponse)
-async def health_check(
-    db: DatabaseManager = Depends(get_db_manager),
-    embeddings: EmbeddingService = Depends(get_embedding_service)
-):
+@app.get("/", tags=["Health"])
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Second Brain Knowledge Analysis API",
+        "status": "running",
+        "version": "2.0.0",
+        "mode": "Read-Only Analysis & Recommendations",
+        "docs": "/docs",
+        "database": "Supabase (Read-Only)"
+    }
+
+
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
+async def health_check():
     """Health check endpoint."""
     start_time = datetime.now()
     
     try:
-        # Check database
-        db_status = "healthy" if db.check_connection() else "unhealthy"
-        
-        # Check OpenAI API
+        # Check Supabase connection
         try:
-            openai_status = "healthy" if await embeddings.check_api_connection() else "unhealthy"
-        except Exception:
+            stats = supabase_manager.get_database_stats()
+            db_status = "healthy"
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            db_status = "unhealthy"
+        
+        # Check Azure OpenAI API
+        try:
+            from core.embeddings import get_embedding
+            test_embedding = get_embedding("test")
+            openai_status = "healthy" if test_embedding else "unhealthy"
+        except Exception as e:
+            logger.error(f"OpenAI health check failed: {e}")
             openai_status = "unhealthy"
         
         overall_status = "healthy" if db_status == "healthy" and openai_status == "healthy" else "unhealthy"
@@ -179,35 +172,36 @@ async def health_check(
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
 
-@app.post("/api/process-text", response_model=ProcessTextResponse)
-async def process_text(
-    request: ProcessTextRequest,
-    db: DatabaseManager = Depends(get_db_manager),
-    embeddings: EmbeddingService = Depends(get_embedding_service),
-    similarity: SemanticSimilarityCore = Depends(get_similarity_core),
-    llm: LLMUpdater = Depends(get_llm_updater)
-):
-    """Main text processing endpoint with two-tier categorization."""
+# MAIN FEATURE: AI-POWERED RECOMMENDATION GENERATION
+
+@app.post("/api/process-text", response_model=ProcessTextResponse, tags=["AI Recommendations"])
+async def process_text(request: ProcessTextRequest):
+    """
+    **MAIN ENDPOINT**: Process input text and generate AI recommendations.
+    
+    This endpoint:
+    1. Analyzes input text using semantic similarity (SSC)
+    2. Generates 3 AI-powered recommendations using Azure OpenAI (LLMUpdater)
+    3. Returns structured recommendations for frontend to handle
+    
+    Frontend will apply selected recommendations to database.
+    """
     start_time = datetime.now()
     
     try:
-        # Clean input text
-        cleaned_text = clean_text_input(request.text)
+        cleaned_text = request.text.strip()
         if not cleaned_text:
             raise HTTPException(status_code=400, detail="Text input cannot be empty")
         
         logger.info(f"Processing text: {cleaned_text[:100]}...")
         
-        # 1. Generate embedding for input text
-        input_embedding = await embeddings.get_embedding(cleaned_text)
+        # 1. Find most similar existing knowledge using SSC
+        similar_item = SSC(cleaned_text, request.threshold)
         
-        # 2. Find most similar existing knowledge (SSC function)
-        similar_item = similarity.SSC(input_embedding, request.threshold)
+        # 2. Generate 3 AI recommendations using LLMUpdater
+        recommendations_data = LLMUpdater(cleaned_text, similar_item, "azure_openai")
         
-        # 3. Generate 3 AI recommendations (LLMUpdater function)
-        recommendations_data = await llm.LLMUpdater(cleaned_text, similar_item)
-        
-        # 4. Format recommendations with two-tier categorization
+        # 3. Format recommendations for frontend
         recommendations = []
         for rec_data in recommendations_data:
             recommendation = RecommendationResponse(
@@ -216,12 +210,12 @@ async def process_text(
                 updated_text=rec_data["updated_text"],
                 main_category=rec_data["main_category"],
                 sub_category=rec_data["sub_category"],
-                tags=rec_data["tags"],
-                preview=rec_data["preview"]
+                tags=rec_data.get("tags", []),
+                preview=rec_data.get("preview", rec_data["updated_text"][:100] + "..." if len(rec_data["updated_text"]) > 100 else rec_data["updated_text"])
             )
             recommendations.append(recommendation)
         
-        # 5. Create response
+        # 4. Create response
         response = ProcessTextResponse(
             recommendations=recommendations,
             similar_main_category=similar_item.get("main_category") if similar_item else None,
@@ -233,7 +227,7 @@ async def process_text(
         duration = (datetime.now() - start_time).total_seconds()
         log_api_call("/api/process-text", "POST", 200, duration)
         
-        logger.info(f"Successfully processed text with {len(recommendations)} recommendations")
+        logger.info(f"✅ Generated {len(recommendations)} recommendations for frontend")
         return response
         
     except HTTPException:
@@ -245,58 +239,21 @@ async def process_text(
         raise HTTPException(status_code=500, detail=f"Text processing failed: {str(e)}")
 
 
-@app.get("/api/categories", response_model=CategoriesResponse)
-async def get_categories(db: DatabaseManager = Depends(get_db_manager)):
-    """Get all knowledge categories grouped by main category."""
+# READ-ONLY DATA ENDPOINTS FOR FRONTEND
+
+@app.get("/api/categories", response_model=CategoriesResponse, tags=["Data Retrieval"])
+async def get_categories():
+    """Get all knowledge categories grouped by academic subject (read-only)."""
     start_time = datetime.now()
     
     try:
-        items = db.get_all_knowledge_items()
+        grouped_categories = supabase_manager.get_categories_grouped()
         
-        # Group by main category
-        main_categories = {}
+        categories = []
+        total_sub_categories = 0
         total_items = 0
         
-        for item in items:
-            # Handle backward compatibility
-            main_cat = getattr(item, 'main_category', None)
-            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
-            
-            if not main_cat:
-                main_cat = get_main_category(sub_cat)
-            
-            if main_cat not in main_categories:
-                main_categories[main_cat] = {
-                    "main_category": main_cat,
-                    "sub_categories": [],
-                    "total_items": 0,
-                    "last_updated": None
-                }
-            
-            # Parse tags
-            tags = safe_json_loads(getattr(item, 'tags', '[]'), [])
-            
-            sub_cat_data = {
-                "id": item.id,
-                "sub_category": sub_cat,
-                "content": item.content,
-                "tags": tags,
-                "created_at": item.created_at.isoformat(),
-                "last_updated": item.last_updated.isoformat()
-            }
-            
-            main_categories[main_cat]["sub_categories"].append(sub_cat_data)
-            main_categories[main_cat]["total_items"] += 1
-            total_items += 1
-            
-            # Update last_updated
-            if (main_categories[main_cat]["last_updated"] is None or 
-                item.last_updated > datetime.fromisoformat(main_categories[main_cat]["last_updated"])):
-                main_categories[main_cat]["last_updated"] = item.last_updated.isoformat()
-        
-        # Convert to response format
-        categories = []
-        for main_cat_data in main_categories.values():
+        for main_cat_data in grouped_categories.values():
             category_response = CategoryResponse(
                 main_category=main_cat_data["main_category"],
                 sub_categories=main_cat_data["sub_categories"],
@@ -304,11 +261,13 @@ async def get_categories(db: DatabaseManager = Depends(get_db_manager)):
                 last_updated=datetime.fromisoformat(main_cat_data["last_updated"]) if main_cat_data["last_updated"] else None
             )
             categories.append(category_response)
+            total_sub_categories += len(main_cat_data["sub_categories"])
+            total_items += main_cat_data["total_items"]
         
         response = CategoriesResponse(
             categories=categories,
             total_main_categories=len(categories),
-            total_sub_categories=sum(len(cat.sub_categories) for cat in categories),
+            total_sub_categories=total_sub_categories,
             total_items=total_items
         )
         
@@ -324,81 +283,53 @@ async def get_categories(db: DatabaseManager = Depends(get_db_manager)):
         raise HTTPException(status_code=500, detail=f"Failed to get categories: {str(e)}")
 
 
-@app.get("/api/main-categories")
-async def get_main_categories():
-    """Get list of all available main categories."""
+@app.get("/api/academic-subjects", tags=["Data Retrieval"])
+async def get_academic_subjects():
+    """Get list of all available academic subjects."""
     start_time = datetime.now()
     
     try:
-        main_categories = get_all_main_categories()
+        subjects = get_all_subject_categories()
         
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/main-categories", "GET", 200, duration)
+        log_api_call("/api/academic-subjects", "GET", 200, duration)
         
         return {
-            "main_categories": main_categories,
-            "total_count": len(main_categories)
+            "academic_subjects": subjects,
+            "total_count": len(subjects),
+            "status": "success"
         }
         
     except Exception as e:
-        logger.error(f"Failed to get main categories: {e}")
+        logger.error(f"Failed to get academic subjects: {e}")
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/main-categories", "GET", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to get main categories: {str(e)}")
+        log_api_call("/api/academic-subjects", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get academic subjects: {str(e)}")
 
 
-@app.get("/api/stats", response_model=StatsResponse)
-async def get_stats(db: DatabaseManager = Depends(get_db_manager)):
-    """Get database statistics with two-tier categorization."""
+@app.get("/api/stats", response_model=StatsResponse, tags=["Analytics"])
+async def get_stats():
+    """Get comprehensive database statistics (read-only)."""
     start_time = datetime.now()
     
     try:
-        items = db.get_all_knowledge_items()
-        
-        # Collect statistics
-        main_categories = set()
-        sub_categories = set()
-        all_tags = []
-        main_category_counts = {}
-        latest_update = None
-        
-        for item in items:
-            # Handle backward compatibility
-            main_cat = getattr(item, 'main_category', None)
-            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
-            
-            if not main_cat:
-                main_cat = get_main_category(sub_cat)
-            
-            main_categories.add(main_cat)
-            sub_categories.add(sub_cat)
-            
-            # Count main categories
-            main_category_counts[main_cat] = main_category_counts.get(main_cat, 0) + 1
-            
-            # Collect tags
-            tags = safe_json_loads(getattr(item, 'tags', '[]'), [])
-            all_tags.extend(tags)
-            
-            # Track latest update
-            if latest_update is None or item.last_updated > latest_update:
-                latest_update = item.last_updated
-        
-        # Count tag frequencies
-        tag_counts = {}
-        for tag in all_tags:
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
-        most_common_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        stats = supabase_manager.get_database_stats()
         
         response = StatsResponse(
-            total_items=len(items),
-            unique_main_categories=len(main_categories),
-            unique_sub_categories=len(sub_categories),
-            unique_tags=len(set(all_tags)),
-            latest_update=latest_update,
-            main_category_distribution=main_category_counts,
-            most_common_tags=most_common_tags
+            total_items=stats['total_knowledge_items'],
+            unique_main_categories=stats['unique_main_categories'],
+            unique_sub_categories=stats['unique_sub_categories'],
+            unique_tags=stats['unique_tags'],
+            unique_sources=stats['unique_sources'],
+            main_category_distribution=stats['main_category_distribution'],
+            source_distribution=stats['source_distribution'],
+            most_common_tags=stats['most_common_tags'],
+            avg_strength_score=stats['avg_strength_score'],
+            items_with_strength_score=stats['items_with_strength_score'],
+            strong_items=stats['strong_items'],
+            weak_items=stats['weak_items'],
+            total_reviews_completed=stats['total_reviews_completed'],
+            database_type=stats['database_type']
         )
         
         duration = (datetime.now() - start_time).total_seconds()
@@ -413,96 +344,42 @@ async def get_stats(db: DatabaseManager = Depends(get_db_manager)):
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
 
 
-@app.post("/api/knowledge", response_model=KnowledgeItemResponse)
-async def create_knowledge_item(
-    item: KnowledgeItemCreate,
-    db: DatabaseManager = Depends(get_db_manager),
-    embeddings: EmbeddingService = Depends(get_embedding_service)
-):
-    """Create a new knowledge item with two-tier categorization."""
+@app.get("/api/knowledge", tags=["Data Retrieval"])
+async def get_all_knowledge():
+    """Get all knowledge items (read-only)."""
     start_time = datetime.now()
     
     try:
-        # Clean content
-        cleaned_content = clean_text_input(item.content)
-        if not cleaned_content:
-            raise HTTPException(status_code=400, detail="Content cannot be empty")
-        
-        # Ensure main_category is set
-        main_category = item.main_category
-        if not main_category:
-            main_category = get_main_category(item.sub_category)
-        
-        # Generate embedding
-        embedding = await embeddings.get_embedding(cleaned_content)
-        
-        # Create item in database
-        db_item = db.create_knowledge_item(
-            main_category=main_category,
-            sub_category=item.sub_category,
-            content=cleaned_content,
-            tags=item.tags,
-            embedding=embedding
-        )
-        
-        # Format response
-        response = KnowledgeItemResponse(
-            id=db_item.id,
-            main_category=main_category,
-            sub_category=item.sub_category,
-            content=db_item.content,
-            tags=safe_json_loads(db_item.tags, []),
-            created_at=db_item.created_at,
-            last_updated=db_item.last_updated
-        )
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/knowledge", "POST", 201, duration)
-        
-        logger.info(f"Created knowledge item with ID: {db_item.id} (Main: {main_category}, Sub: {item.sub_category})")
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create knowledge item: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/knowledge", "POST", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to create knowledge item: {str(e)}")
-
-
-@app.get("/api/knowledge")
-async def get_all_knowledge(db: DatabaseManager = Depends(get_db_manager)):
-    """Get all knowledge items with two-tier categorization."""
-    start_time = datetime.now()
-    
-    try:
-        items = db.get_all_knowledge_items()
+        items = supabase_manager.load_all_knowledge()
         
         result = []
         for item in items:
-            # Handle backward compatibility
-            main_cat = getattr(item, 'main_category', None)
-            sub_cat = getattr(item, 'sub_category', getattr(item, 'category', 'unknown'))
-            
-            if not main_cat:
-                main_cat = get_main_category(sub_cat)
-            
-            item_data = {
-                "id": item.id,
-                "main_category": main_cat,
-                "sub_category": sub_cat,
-                "content": item.content,
-                "tags": safe_json_loads(getattr(item, 'tags', '[]'), []),
-                "created_at": item.created_at.isoformat(),
-                "last_updated": item.last_updated.isoformat()
-            }
+            item_data = KnowledgeItemResponse(
+                id=item.get('id'),
+                main_category=item.get('main_category', 'General Studies'),
+                sub_category=item.get('sub_category', 'unknown'),
+                content=item.get('content', ''),
+                tags=item.get('tags', []),
+                source=item.get('source', 'text'),
+                strength_score=item.get('strength_score'),
+                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
+                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
+                review_count=item.get('review_count', 0),
+                ease_factor=item.get('ease_factor', 2.5),
+                interval_days=item.get('interval_days', 1),
+                created_at=datetime.fromisoformat(item['created_at']),
+                last_updated=datetime.fromisoformat(item['last_updated'])
+            )
             result.append(item_data)
         
         duration = (datetime.now() - start_time).total_seconds()
         log_api_call("/api/knowledge", "GET", 200, duration)
         
-        return {"knowledge_items": result, "total_items": len(result)}
+        return {
+            "knowledge_items": result, 
+            "total_items": len(result),
+            "status": "success"
+        }
         
     except Exception as e:
         logger.error(f"Failed to get knowledge items: {e}")
@@ -511,121 +388,224 @@ async def get_all_knowledge(db: DatabaseManager = Depends(get_db_manager)):
         raise HTTPException(status_code=500, detail=f"Failed to get knowledge items: {str(e)}")
 
 
-@app.put("/api/knowledge/{item_id}", response_model=KnowledgeItemResponse)
-async def update_knowledge_item(
-    item_id: int,
-    item: KnowledgeItemUpdate,
-    db: DatabaseManager = Depends(get_db_manager),
-    embeddings: EmbeddingService = Depends(get_embedding_service)
-):
-    """Update existing knowledge item with two-tier categorization."""
+@app.get("/api/knowledge/category/{main_category}", tags=["Data Retrieval"])
+async def get_knowledge_by_category(main_category: str):
+    """Get all knowledge items for a specific academic subject (read-only)."""
     start_time = datetime.now()
     
     try:
-        # Check if item exists
-        existing_item = db.get_knowledge_item_by_id(item_id)
-        if not existing_item:
-            raise HTTPException(status_code=404, detail="Knowledge item not found")
+        items = supabase_manager.get_knowledge_by_main_category(main_category)
         
-        # Prepare update data
-        update_data = {}
-        new_embedding = None
+        result = []
+        for item in items:
+            item_data = KnowledgeItemResponse(
+                id=item.get('id'),
+                main_category=item.get('main_category'),
+                sub_category=item.get('sub_category'),
+                content=item.get('content', ''),
+                tags=item.get('tags', []),
+                source=item.get('source', 'text'),
+                strength_score=item.get('strength_score'),
+                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
+                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
+                review_count=item.get('review_count', 0),
+                ease_factor=item.get('ease_factor', 2.5),
+                interval_days=item.get('interval_days', 1),
+                created_at=datetime.fromisoformat(item['created_at']),
+                last_updated=datetime.fromisoformat(item['last_updated'])
+            )
+            result.append(item_data)
         
-        if item.sub_category is not None:
-            update_data["sub_category"] = item.sub_category
-            # Auto-determine main_category if not explicitly provided
-            if item.main_category is None:
-                update_data["main_category"] = get_main_category(item.sub_category)
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call(f"/api/knowledge/category/{main_category}", "GET", 200, duration)
         
-        if item.main_category is not None:
-            update_data["main_category"] = item.main_category
+        return {
+            "knowledge_items": result,
+            "main_category": main_category,
+            "total_items": len(result),
+            "status": "success"
+        }
         
-        if item.content is not None:
-            cleaned_content = clean_text_input(item.content)
-            if not cleaned_content:
-                raise HTTPException(status_code=400, detail="Content cannot be empty")
-            update_data["content"] = cleaned_content
-            
-            # Generate new embedding for updated content
-            new_embedding = await embeddings.get_embedding(cleaned_content)
+    except Exception as e:
+        logger.error(f"Failed to get knowledge for category {main_category}: {e}")
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call(f"/api/knowledge/category/{main_category}", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get knowledge for category: {str(e)}")
+
+
+@app.get("/api/search", response_model=SearchResponse, tags=["Data Retrieval"])
+async def search_knowledge(
+    q: str = Query(..., description="Search term"),
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of results")
+):
+    """Search knowledge items by content (read-only)."""
+    start_time = datetime.now()
+    
+    try:
+        items = supabase_manager.search_knowledge_by_content(q, limit)
         
-        if item.tags is not None:
-            update_data["tags"] = item.tags
+        result = []
+        for item in items:
+            item_data = KnowledgeItemResponse(
+                id=item.get('id'),
+                main_category=item.get('main_category'),
+                sub_category=item.get('sub_category'),
+                content=item.get('content', ''),
+                tags=item.get('tags', []),
+                source=item.get('source', 'text'),
+                strength_score=item.get('strength_score'),
+                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
+                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
+                review_count=item.get('review_count', 0),
+                ease_factor=item.get('ease_factor', 2.5),
+                interval_days=item.get('interval_days', 1),
+                created_at=datetime.fromisoformat(item['created_at']),
+                last_updated=datetime.fromisoformat(item['last_updated'])
+            )
+            result.append(item_data)
         
-        # Update item in database
-        updated_item = db.update_knowledge_item(
-            item_id=item_id,
-            main_category=update_data.get("main_category"),
-            sub_category=update_data.get("sub_category"),
-            content=update_data.get("content"),
-            tags=update_data.get("tags"),
-            embedding=new_embedding
-        )
-        
-        if not updated_item:
-            raise HTTPException(status_code=404, detail="Knowledge item not found")
-        
-        # Format response
-        response = KnowledgeItemResponse(
-            id=updated_item.id,
-            main_category=getattr(updated_item, 'main_category', get_main_category(getattr(updated_item, 'sub_category', 'unknown'))),
-            sub_category=getattr(updated_item, 'sub_category', getattr(updated_item, 'category', 'unknown')),
-            content=updated_item.content,
-            tags=safe_json_loads(updated_item.tags, []),
-            created_at=updated_item.created_at,
-            last_updated=updated_item.last_updated
+        response = SearchResponse(
+            results=result,
+            total_results=len(result),
+            search_term=q,
+            status="success"
         )
         
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/knowledge/{item_id}", "PUT", 200, duration)
+        log_api_call("/api/search", "GET", 200, duration)
         
-        logger.info(f"Updated knowledge item with ID: {item_id}")
         return response
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Failed to update knowledge item {item_id}: {e}")
+        logger.error(f"Search failed for term '{q}': {e}")
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/knowledge/{item_id}", "PUT", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to update knowledge item: {str(e)}")
+        log_api_call("/api/search", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@app.delete("/api/knowledge/{item_id}")
-async def delete_knowledge_item(
-    item_id: int,
-    db: DatabaseManager = Depends(get_db_manager)
-):
-    """Delete knowledge item."""
+# ANALYTICS ENDPOINTS
+
+@app.get("/api/analytics/strength-distribution", response_model=StrengthDistributionResponse, tags=["Analytics"])
+async def get_strength_distribution():
+    """Get knowledge strength score distribution for analytics."""
     start_time = datetime.now()
     
     try:
-        success = db.delete_knowledge_item(item_id)
+        distribution = supabase_manager.get_knowledge_strength_distribution()
         
-        if not success:
-            raise HTTPException(status_code=404, detail="Knowledge item not found")
+        response = StrengthDistributionResponse(
+            very_weak=distribution['very_weak'],
+            weak=distribution['weak'],
+            medium=distribution['medium'],
+            strong=distribution['strong'],
+            very_strong=distribution['very_strong'],
+            no_score=distribution['no_score']
+        )
         
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/knowledge/{item_id}", "DELETE", 200, duration)
+        log_api_call("/api/analytics/strength-distribution", "GET", 200, duration)
         
-        logger.info(f"Deleted knowledge item with ID: {item_id}")
-        return {"message": "Knowledge item deleted successfully", "id": item_id}
+        return response
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Failed to delete knowledge item {item_id}: {e}")
+        logger.error(f"Failed to get strength distribution: {e}")
         duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/knowledge/{item_id}", "DELETE", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to delete knowledge item: {str(e)}")
+        log_api_call("/api/analytics/strength-distribution", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get strength distribution: {str(e)}")
+
+
+@app.get("/api/analytics/category-strength", tags=["Analytics"])
+async def get_category_strength_analysis():
+    """Get strength analysis by academic category."""
+    start_time = datetime.now()
+    
+    try:
+        analysis = supabase_manager.get_category_strength_analysis()
+        
+        result = []
+        for category, data in analysis.items():
+            result.append(CategoryStrengthResponse(
+                category=category,
+                avg_strength=data['avg_strength'],
+                total_items=data['total_items'],
+                strong_items=data['strong_items'],
+                weak_items=data['weak_items']
+            ))
+        
+        # Sort by average strength descending
+        result.sort(key=lambda x: x.avg_strength, reverse=True)
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/analytics/category-strength", "GET", 200, duration)
+        
+        return {
+            "categories": result,
+            "total_categories": len(result),
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get category strength analysis: {e}")
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/analytics/category-strength", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get category strength analysis: {str(e)}")
+
+
+@app.get("/api/analytics/items-due", response_model=ItemsDueResponse, tags=["Analytics"])
+async def get_items_due_for_review(limit: int = Query(50, ge=1, le=200, description="Maximum number of items")):
+    """Get knowledge items due for review (analytics only - no updates)."""
+    start_time = datetime.now()
+    
+    try:
+        items_due = supabase_manager.get_items_due_for_review(limit)
+        
+        formatted_items = []
+        for item in items_due:
+            formatted_item = KnowledgeItemResponse(
+                id=item['id'],
+                main_category=item['main_category'],
+                sub_category=item['sub_category'],
+                content=item['content'],
+                tags=item.get('tags', []),
+                source=item.get('source', 'text'),
+                strength_score=item.get('strength_score'),
+                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
+                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
+                review_count=item.get('review_count', 0),
+                ease_factor=item.get('ease_factor', 2.5),
+                interval_days=item.get('interval_days', 1),
+                created_at=datetime.fromisoformat(item['created_at']),
+                last_updated=datetime.fromisoformat(item['last_updated'])
+            )
+            formatted_items.append(formatted_item)
+        
+        response = ItemsDueResponse(
+            items_due=formatted_items,
+            total_due=len(formatted_items)
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/analytics/items-due", "GET", 200, duration)
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to get items due for review: {e}")
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/analytics/items-due", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get items due for review: {str(e)}")
 
 
 if __name__ == "__main__":
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", 8000))
     
-    logger.info(f"Starting FastAPI server on {host}:{port}")
-    logger.info("Two-tier categorization system enabled")
+    logger.info(f"🌟 Starting Second Brain Analysis API on {host}:{port}")
+    logger.info("📚 Read-Only Mode: Database updates handled by frontend")
+    logger.info("🤖 AI Recommendations: Powered by Azure OpenAI")
+    logger.info("📊 Analytics: Comprehensive knowledge insights")
+    logger.info(f"📖 API docs: http://{host}:{port}/docs")
+    logger.info(f"📋 Alternative docs: http://{host}:{port}/redoc")
     
     uvicorn.run(
         "main:app",

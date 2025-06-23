@@ -1,7 +1,8 @@
 import openai
+import json
 from typing import List, Dict, Optional
 from config.settings import settings
-from utils.category_mapping import get_main_category
+from utils.category_mapping import get_all_subject_categories, get_subject_categories_prompt_text, validate_subject_category, get_subject_category_fallback
 
 def call_azure_openai_llm(prompt: str) -> str:
     """
@@ -28,18 +29,18 @@ def call_azure_openai_llm(prompt: str) -> str:
     response = client.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
         messages=[
-            {"role": "system", "content": "You are a helpful AI assistant for knowledge management. Provide structured, actionable recommendations."},
+            {"role": "system", "content": "You are a helpful AI assistant for knowledge management. You excel at categorizing information and providing structured, actionable recommendations. Always follow the exact JSON format requested."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
-        max_tokens=1500
+        max_tokens=2000
     )
     
     return response.choices[0].message.content
 
 def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], llm_type: str = "azure_openai") -> List[Dict]:
     """
-    Generate 3 different recommendations for updating knowledge using Azure OpenAI
+    Generate 3 different recommendations using Azure OpenAI with category selection
     
     Args:
         input_text: New text input from user
@@ -64,8 +65,13 @@ def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], llm_type: st
     else:
         context += "No similar existing knowledge found.\n\n"
     
-    # Create the prompt for generating recommendations
+    # Get academic subject categories for the prompt
+    categories_text = get_subject_categories_prompt_text()
+    
+    # Create the enhanced prompt with category selection
     prompt = f"""{context}
+
+{categories_text}
 
 Please provide exactly 3 different recommendations for handling this new input text. Each recommendation should be a different approach:
 
@@ -73,12 +79,12 @@ Please provide exactly 3 different recommendations for handling this new input t
 2. **Replace/Revise Approach**: If similar knowledge exists, replace or significantly revise it  
 3. **New Category Approach**: Create entirely new knowledge in a new sub-category
 
-For each recommendation, provide:
-- A clear explanation of what changes will be made
-- The complete updated/new text content
-- A specific sub-category name (be descriptive and specific, e.g., "machine learning algorithms", "startup funding strategies", "productivity techniques")
-- 3-5 relevant tags
-- A brief preview (first 100 characters)
+IMPORTANT INSTRUCTIONS:
+- You MUST select the main_category from the academic subject list above (use the exact text)
+- Create a specific, descriptive sub_category within that academic subject (e.g., "quantum mechanics applications", "Renaissance art techniques", "startup financial modeling")
+- Ensure sub_category is more specific than the main academic subject
+- Provide 3-5 relevant tags
+- Make content comprehensive and well-structured
 
 Format your response as JSON with this exact structure:
 [
@@ -86,44 +92,53 @@ Format your response as JSON with this exact structure:
     "option_number": 1,
     "change": "Description of what changes will be made",
     "updated_text": "Complete updated or new content text",
-    "sub_category": "specific sub-category name",
-    "tags": ["tag1", "tag2", "tag3"],
-    "preview": "Brief preview of content..."
+    "main_category": "EXACT academic subject name from the list above",
+    "sub_category": "specific descriptive sub-topic within that subject",
+    "tags": ["tag1", "tag2", "tag3", "tag4"],
+    "preview": "Brief preview of content (first 100 chars)..."
   }},
   {{
     "option_number": 2,
     "change": "Description of what changes will be made",
     "updated_text": "Complete updated or new content text", 
-    "sub_category": "specific sub-category name",
-    "tags": ["tag1", "tag2", "tag3"],
-    "preview": "Brief preview of content..."
+    "main_category": "EXACT academic subject name from the list above",
+    "sub_category": "specific descriptive sub-topic within that subject",
+    "tags": ["tag1", "tag2", "tag3", "tag4"],
+    "preview": "Brief preview of content (first 100 chars)..."
   }},
   {{
     "option_number": 3,
     "change": "Description of what changes will be made",
     "updated_text": "Complete updated or new content text",
-    "sub_category": "specific sub-category name", 
-    "tags": ["tag1", "tag2", "tag3"],
-    "preview": "Brief preview of content..."
+    "main_category": "EXACT academic subject name from the list above",
+    "sub_category": "specific descriptive sub-topic within that subject", 
+    "tags": ["tag1", "tag2", "tag3", "tag4"],
+    "preview": "Brief preview of content (first 100 chars)..."
   }}
 ]
 
-Make sure the sub-categories are specific and descriptive. The content should be comprehensive and well-structured."""
+CRITICAL: 
+- main_category must be one of the academic subjects listed above (exact match)
+- sub_category should be a specific topic/area within that academic subject
+- Ensure JSON is valid and properly formatted"""
 
     try:
         # Get response from Azure OpenAI
         llm_response = call_azure_openai_llm(prompt)
         
         # Parse the JSON response
-        import json
         recommendations = json.loads(llm_response)
         
         # Validate and enhance each recommendation
         enhanced_recommendations = []
         for rec in recommendations:
-            # Determine main category from sub-category
-            sub_category = rec.get('sub_category', 'general')
-            main_category = get_main_category(sub_category)
+            main_category = rec.get('main_category', '')
+            sub_category = rec.get('sub_category', 'general knowledge')
+            
+            # Validate main category (academic subject)
+            if not validate_subject_category(main_category):
+                print(f"⚠️  Warning: Invalid academic subject '{main_category}', using fallback")
+                main_category = get_subject_category_fallback(sub_category)
             
             enhanced_rec = {
                 'option_number': rec.get('option_number', len(enhanced_recommendations) + 1),
@@ -136,14 +151,15 @@ Make sure the sub-categories are specific and descriptive. The content should be
             }
             enhanced_recommendations.append(enhanced_rec)
         
+        print(f"✅ Generated {len(enhanced_recommendations)} recommendations with category selection")
         return enhanced_recommendations
         
     except json.JSONDecodeError as e:
-        print(f"Error parsing LLM response as JSON: {e}")
-        # Fallback recommendations
+        print(f"❌ Error parsing LLM response as JSON: {e}")
+        print(f"Raw response: {llm_response[:200]}...")
         return create_fallback_recommendations(input_text, existing_knowledge)
     except Exception as e:
-        print(f"Error calling Azure OpenAI: {e}")
+        print(f"❌ Error calling Azure OpenAI: {e}")
         return create_fallback_recommendations(input_text, existing_knowledge)
 
 def create_fallback_recommendations(input_text: str, existing_knowledge: Optional[Dict]) -> List[Dict]:
@@ -157,21 +173,9 @@ def create_fallback_recommendations(input_text: str, existing_knowledge: Optiona
     Returns:
         List of 3 fallback recommendations
     """
-    # Determine sub-category from input text (simple keyword matching)
-    input_lower = input_text.lower()
-    
-    if any(word in input_lower for word in ['ai', 'machine learning', 'neural', 'algorithm']):
-        sub_category = 'artificial intelligence'
-    elif any(word in input_lower for word in ['business', 'startup', 'entrepreneur', 'marketing']):
-        sub_category = 'business strategy'
-    elif any(word in input_lower for word in ['productivity', 'time management', 'habits']):
-        sub_category = 'productivity techniques'
-    elif any(word in input_lower for word in ['programming', 'code', 'software', 'development']):
-        sub_category = 'software development'
-    else:
-        sub_category = 'general knowledge'
-    
-    main_category = get_main_category(sub_category)
+    # Use simple keyword-based subject detection for fallback
+    main_category = get_subject_category_fallback(input_text)
+    sub_category = 'general knowledge'
     
     recommendations = [
         {
@@ -194,13 +198,14 @@ def create_fallback_recommendations(input_text: str, existing_knowledge: Optiona
         },
         {
             'option_number': 3,
-            'change': 'Create new specialized category',
+            'change': 'Create new specialized entry',
             'updated_text': input_text,
-            'main_category': 'General',
+            'main_category': 'General Studies',
             'sub_category': 'specialized knowledge',
             'tags': ['specialized', 'new-category'],
             'preview': input_text[:100] + '...' if len(input_text) > 100 else input_text
         }
     ]
     
+    print(f"⚠️  Using fallback recommendations with academic subject: {main_category}")
     return recommendations
