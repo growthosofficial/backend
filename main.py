@@ -27,8 +27,7 @@ from models import (
     ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
     KnowledgeItemResponse, CategoryResponse, CategoriesResponse,
     HealthResponse, StatsResponse, StrengthDistributionResponse, 
-    CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse,
-    EvaluationResponse, EvaluationsResponse, EvaluationStatsResponse
+    CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse
 )
 from config.settings import settings
 from core.similarity import SSC
@@ -595,172 +594,6 @@ async def get_items_due_for_review(limit: int = Query(50, ge=1, le=200, descript
         raise HTTPException(status_code=500, detail=f"Failed to get items due for review: {str(e)}")
 
 
-# EVALUATION ENDPOINTS
-
-@app.get("/api/evaluations", response_model=EvaluationsResponse, tags=["Evaluations"])
-async def get_all_evaluations(
-    limit: int = Query(100, ge=1, le=500, description="Maximum number of evaluations to return"),
-    offset: int = Query(0, ge=0, description="Number of evaluations to skip")
-):
-    """Get all evaluations from the database with pagination."""
-    start_time = datetime.now()
-    
-    try:
-        evaluations_data = supabase_manager.get_all_evaluations(limit, offset)
-        
-        evaluations = []
-        total_score = 0
-        
-        for eval_data in evaluations_data:
-            evaluation = EvaluationResponse(
-                id=eval_data['id'],
-                knowledge_id=eval_data['knowledge_id'],
-                question_text=eval_data['question_text'],
-                answer_text=eval_data['answer_text'],
-                score=eval_data['score'],
-                feedback=eval_data['feedback'],
-                correct_points=eval_data.get('correct_points', []),
-                incorrect_points=eval_data.get('incorrect_points', []),
-                improvement_suggestions=eval_data['improvement_suggestions'],
-                created_at=datetime.fromisoformat(eval_data['created_at']),
-                knowledge_item=eval_data.get('knowledge_items')
-            )
-            evaluations.append(evaluation)
-            total_score += eval_data['score']
-        
-        average_score = total_score / len(evaluations) if evaluations else 0
-        
-        response = EvaluationsResponse(
-            evaluations=evaluations,
-            total_evaluations=len(evaluations),
-            average_score=round(average_score, 2)
-        )
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/evaluations", "GET", 200, duration)
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Failed to get evaluations: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/evaluations", "GET", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to get evaluations: {str(e)}")
-
-
-@app.get("/api/evaluations/knowledge/{knowledge_id}", tags=["Evaluations"])
-async def get_evaluations_by_knowledge_id(knowledge_id: int):
-    """Get all evaluations for a specific knowledge item."""
-    start_time = datetime.now()
-    
-    try:
-        evaluations_data = supabase_manager.get_evaluations_by_knowledge_id(knowledge_id)
-        
-        evaluations = []
-        for eval_data in evaluations_data:
-            evaluation = EvaluationResponse(
-                id=eval_data['id'],
-                knowledge_id=eval_data['knowledge_id'],
-                question_text=eval_data['question_text'],
-                answer_text=eval_data['answer_text'],
-                score=eval_data['score'],
-                feedback=eval_data['feedback'],
-                correct_points=eval_data.get('correct_points', []),
-                incorrect_points=eval_data.get('incorrect_points', []),
-                improvement_suggestions=eval_data['improvement_suggestions'],
-                created_at=datetime.fromisoformat(eval_data['created_at'])
-            )
-            evaluations.append(evaluation)
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/evaluations/knowledge/{knowledge_id}", "GET", 200, duration)
-        
-        return {
-            "evaluations": evaluations,
-            "knowledge_id": knowledge_id,
-            "total_evaluations": len(evaluations),
-            "status": "success"
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get evaluations for knowledge_id {knowledge_id}: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/evaluations/knowledge/{knowledge_id}", "GET", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to get evaluations for knowledge item: {str(e)}")
-
-
-@app.get("/api/evaluations/category/{main_category}", tags=["Evaluations"])
-async def get_evaluations_by_category(main_category: str):
-    """Get all evaluations for a specific academic category."""
-    start_time = datetime.now()
-    
-    try:
-        evaluations_data = supabase_manager.get_evaluations_by_category(main_category)
-        
-        evaluations = []
-        for eval_data in evaluations_data:
-            evaluation = EvaluationResponse(
-                id=eval_data['id'],
-                knowledge_id=eval_data['knowledge_id'],
-                question_text=eval_data['question_text'],
-                answer_text=eval_data['answer_text'],
-                score=eval_data['score'],
-                feedback=eval_data['feedback'],
-                correct_points=eval_data.get('correct_points', []),
-                incorrect_points=eval_data.get('incorrect_points', []),
-                improvement_suggestions=eval_data['improvement_suggestions'],
-                created_at=datetime.fromisoformat(eval_data['created_at']),
-                knowledge_item=eval_data.get('knowledge_items')
-            )
-            evaluations.append(evaluation)
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/evaluations/category/{main_category}", "GET", 200, duration)
-        
-        return {
-            "evaluations": evaluations,
-            "main_category": main_category,
-            "total_evaluations": len(evaluations),
-            "status": "success"
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get evaluations for category {main_category}: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call(f"/api/evaluations/category/{main_category}", "GET", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to get evaluations for category: {str(e)}")
-
-
-@app.get("/api/evaluations/stats", response_model=EvaluationStatsResponse, tags=["Analytics"])
-async def get_evaluation_statistics():
-    """Get comprehensive evaluation statistics and analytics."""
-    start_time = datetime.now()
-    
-    try:
-        stats = supabase_manager.get_evaluation_statistics()
-        
-        response = EvaluationStatsResponse(
-            total_evaluations=stats['total_evaluations'],
-            average_score=stats['average_score'],
-            score_distribution=stats['score_distribution'],
-            category_performance=stats['category_performance'],
-            recent_evaluations=stats['recent_evaluations'],
-            highest_scoring_category=stats.get('highest_scoring_category'),
-            lowest_scoring_category=stats.get('lowest_scoring_category')
-        )
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/evaluations/stats", "GET", 200, duration)
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Failed to get evaluation statistics: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/evaluations/stats", "GET", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Failed to get evaluation statistics: {str(e)}")
-
-
 if __name__ == "__main__":
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", 8000))
@@ -769,8 +602,6 @@ if __name__ == "__main__":
     logger.info("📚 Read-Only Mode: Database updates handled by frontend")
     logger.info("🤖 AI Recommendations: Powered by Azure OpenAI")
     logger.info("📊 Analytics: Comprehensive knowledge insights")
-    logger.info("🧠 Self-Test: AI-powered question generation and evaluation")
-    logger.info("📈 Evaluations: Complete assessment tracking and analytics")
     logger.info(f"📖 API docs: http://{host}:{port}/docs")
     logger.info(f"📋 Alternative docs: http://{host}:{port}/redoc")
     
