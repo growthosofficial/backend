@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from supabase import create_client, Client
 from datetime import datetime, timedelta
 
@@ -57,6 +57,16 @@ class SupabaseManager:
         result = self.supabase.table('knowledge_items').select('*').order('created_at', desc=True).execute()
         
         print(f"📚 Loaded {len(result.data)} knowledge items from Supabase for analysis")
+        return result.data
+
+    def load_knowledge_by_ids(self, ids: List[int]) -> List[Dict]:
+        """
+        Load knowledge items by IDs
+        
+        Args:
+            ids: List of knowledge item IDs
+        """
+        result = self.supabase.table('knowledge_items').select('*').in_('id', ids).execute()
         return result.data
     
     def search_knowledge_by_content(self, search_term: str, limit: int = 10) -> List[Dict]:
@@ -325,6 +335,26 @@ class SupabaseManager:
                 }
         
         return category_analysis
+
+    def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
+        try:
+            evaluation = {
+                "knowledge_id": evaluation_data["knowledge_id"],
+                "question_text": evaluation_data["question_text"],
+                "answer_text": evaluation_data["answer_text"],
+                "score": evaluation_data["score"],
+                "feedback": evaluation_data["feedback"],
+                "improvement_suggestions": evaluation_data["improvement_suggestions"],
+                "correct_points": evaluation_data["correct_points"],
+                "incorrect_points": evaluation_data["incorrect_points"],
+            }
+            # Insert evaluation with points as arrays
+            result = self.supabase.table('evaluations').insert(evaluation).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error in create_evaluation: {e}")
+            return None
+
 
 # Create global instance
 supabase_manager = SupabaseManager()

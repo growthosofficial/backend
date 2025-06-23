@@ -23,23 +23,20 @@ current_dir = Path(__file__).parent
 src_dir = current_dir / "src"
 sys.path.insert(0, str(src_dir))
 
-try:
-    from models import (
-        ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
-        KnowledgeItemResponse, CategoryResponse, CategoriesResponse,
-        HealthResponse, StatsResponse, StrengthDistributionResponse, 
-        CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse
-    )
-    from config.settings import settings
-    from core.similarity import SSC
-    from core.llm_updater import LLMUpdater
-    from database.supabase_manager import supabase_manager
-    from utils.category_mapping import get_all_subject_categories
-    from utils.helpers import log_api_call, create_error_response
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Make sure you're running from the correct directory and all dependencies are installed")
-    raise
+from models import (
+    ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
+    KnowledgeItemResponse, CategoryResponse, CategoriesResponse,
+    HealthResponse, StatsResponse, StrengthDistributionResponse, 
+    CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse
+)
+from config.settings import settings
+from core.similarity import SSC
+from core.llm_updater import LLMUpdater
+from database.supabase_manager import supabase_manager
+from utils.category_mapping import get_all_subject_categories
+from utils.helpers import log_api_call, create_error_response
+
+from api.self_test import router as self_test_router
 
 # Load environment variables
 load_dotenv()
@@ -85,6 +82,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+app.include_router(self_test_router)
 
 # Configure CORS
 cors_origins = os.getenv("CORS_ORIGINS", '["http://localhost:3000", "http://localhost:5173"]')
