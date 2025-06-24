@@ -207,7 +207,8 @@ async def evaluate_answers(request: BatchAnswerRequest):
             
             # Get the knowledge content and category
             knowledge_content = knowledge_item.get('content', '')
-            category = knowledge_item.get('category', 'Unknown')
+            main_category = knowledge_item.get('main_category', 'Unknown')
+            sub_category = knowledge_item.get('sub_category', 'Unknown')
             
             if not knowledge_content:
                 raise HTTPException(
@@ -215,15 +216,13 @@ async def evaluate_answers(request: BatchAnswerRequest):
                     detail=f"Knowledge item {knowledge_id} has no content"
                 )
             
-            if category == 'Unknown':
-                print(f"Warning: Knowledge item {knowledge_id} has no category, using 'Unknown'")
-            
             # Evaluate the answer
             evaluation = evaluate_answer(
                 question_text=answer_request.question_text,
                 answer=answer_request.answer,
                 knowledge_content=knowledge_content,
-                category=category
+                main_category=main_category,
+                sub_category=sub_category
             )
             
             # Store evaluation in database

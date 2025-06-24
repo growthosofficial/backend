@@ -336,6 +336,28 @@ class SupabaseManager:
         
         return category_analysis
 
+    def update_mastery(self, knowledge_id: int, mastery: float) -> None:
+        """
+        Update the mastery level of a knowledge item
+        
+        Args:
+            knowledge_id: ID of the knowledge item
+            mastery: Mastery level between 0 and 1
+        """
+        try:
+            # Ensure mastery is between 0 and 1
+            mastery = max(0, min(1, mastery))
+            mastery = round(mastery, 2)
+            
+            # Update mastery
+            self.supabase.table('knowledge_items')\
+                .update({'mastery': mastery})\
+                .eq('id', knowledge_id)\
+                .execute()
+                
+        except Exception as e:
+            print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
+
     def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
         try:
             evaluation = {
@@ -344,12 +366,16 @@ class SupabaseManager:
                 "answer_text": evaluation_data["answer_text"],
                 "score": evaluation_data["score"],
                 "feedback": evaluation_data["feedback"],
-                "improvement_suggestions": evaluation_data["improvement_suggestions"],
                 "correct_points": evaluation_data["correct_points"],
-                "incorrect_points": evaluation_data["incorrect_points"],
+                "incorrect_points": evaluation_data["incorrect_points"]
             }
             # Insert evaluation with points as arrays
             result = self.supabase.table('evaluations').insert(evaluation).execute()
+            
+            # Mock mastery update - using 0.5 for now
+            # TODO: Replace with actual mastery calculation based on evaluation
+            self.update_mastery(evaluation_data["knowledge_id"], 0.5)
+            
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error in create_evaluation: {e}")
