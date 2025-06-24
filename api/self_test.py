@@ -17,7 +17,7 @@ sys.path.insert(0, str(src_dir))
 
 try:
     from database.supabase_manager import supabase_manager
-    from core.self_test import generate_question, evaluate_answer
+    from core.self_test import generate_question, evaluate_answer, get_knowledge_mastery
 except ImportError as e:
     print(f"❌ Import error in self_test.py: {e}")
     print(f"Current directory: {current_dir}")
@@ -39,14 +39,14 @@ class QuestionType(str, Enum):
 class Question(BaseModel):
     """Question model for self-test feature"""
     question_text: str = Field(..., description="The question text")
-    category: str = Field(..., description="Knowledge category this question is from")
+    main_category: str = Field(..., description="Main knowledge category")
+    sub_category: str = Field(..., description="Sub category within the main category")
     knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
     answer: str = Field("", description="The answer to evaluate (empty for question generation)")
 
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""
     questions: List[Question] = Field(..., description="List of generated questions")
-    categories_covered: List[str] = Field(..., description="List of knowledge categories covered")
     total_questions: int = Field(..., description="Total number of questions generated")
 
 class AnswerRequest(BaseModel):
@@ -63,8 +63,10 @@ class EvaluationResponse(BaseModel):
     feedback: str = Field(..., description="Overall feedback on the answer")
     correct_points: List[str] = Field(default_factory=list, description="Points that were correct")
     incorrect_points: List[str] = Field(default_factory=list, description="Points that were incorrect or missing")
-    improvement_suggestions: str = Field(..., description="Suggestions for improvement")
     evaluation_id: int | None = Field(None, description="Database ID of the stored evaluation")
+    knowledge_id: int = Field(..., description="ID of the knowledge item")
+    mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
+    mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -74,7 +76,6 @@ class BatchEvaluationResponse(BaseModel):
     """Response model for batch answer evaluation"""
     evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
     total_evaluated: int = Field(..., description="Total number of answers evaluated")
-    average_score: float = Field(..., ge=1.0, le=5.0, description="Average score across all answers")
 
 @router.post("/generate", response_model=GenerateQuestionsResponse)
 async def generate_questions(
@@ -119,17 +120,17 @@ async def generate_questions(
 
         # Generate questions for each selected item
         questions = []
-        categories_covered = set()
         
         for item in selected_items:
-            # Prepare knowledge text
-            category = item.get('category', 'Unknown')
+            # Get categories and content
+            main_category = item.get('main_category', 'Unknown')
+            sub_category = item.get('sub_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
             # Generate question using our dedicated function
             question_data = generate_question(
-                category=category,
+                category=main_category,  # Pass main category for backwards compatibility
                 content=content,
                 knowledge_id=knowledge_id
             )
@@ -138,12 +139,12 @@ async def generate_questions(
                 # Create Question object
                 question = Question(
                     question_text=question_data['question_text'],
-                    category=category,
+                    main_category=main_category,
+                    sub_category=sub_category,
                     knowledge_id=knowledge_id,
                     answer=""
                 )
                 questions.append(question)
-                categories_covered.add(category)
         
         if not questions:
             raise HTTPException(
@@ -153,7 +154,6 @@ async def generate_questions(
         
         return GenerateQuestionsResponse(
             questions=questions,
-            categories_covered=list(categories_covered),
             total_questions=len(questions)
         )
         
@@ -172,8 +172,8 @@ async def evaluate_answers(request: BatchAnswerRequest):
     1. Takes a list of answers with their corresponding knowledge IDs and questions
     2. Efficiently loads all required knowledge items at once
     3. Evaluates each answer using Azure OpenAI
-    4. Stores evaluation results in the database
-    5. Returns detailed feedback and scores for all answers
+    4. Stores evaluation results and updates mastery in the database
+    5. Returns detailed feedback, scores and mastery levels for all answers
     """
     try:
         # Extract unique knowledge IDs
@@ -192,7 +192,6 @@ async def evaluate_answers(request: BatchAnswerRequest):
         
         # Evaluate each answer
         evaluations = []
-        total_score = 0
         
         for answer_request in request.answers:
             knowledge_id = answer_request.knowledge_id
@@ -225,17 +224,33 @@ async def evaluate_answers(request: BatchAnswerRequest):
                 sub_category=sub_category
             )
             
-            # Store evaluation in database
-            stored_eval = supabase_manager.create_evaluation({
+            # Create evaluation data
+            evaluation_data = {
                 "knowledge_id": knowledge_id,
                 "question_text": answer_request.question_text,
                 "answer_text": answer_request.answer,
                 "score": evaluation['score'],
                 "feedback": evaluation['feedback'],
-                "improvement_suggestions": evaluation['improvement_suggestions'],
                 "correct_points": evaluation['correct_points'],
                 "incorrect_points": evaluation['incorrect_points']
-            })
+            }
+            
+            # Store evaluation in database
+            stored_eval = supabase_manager.create_evaluation(evaluation_data)
+            
+            # Calculate and update mastery
+            mastery_result = get_knowledge_mastery(
+                knowledge_id=knowledge_id,
+                current_evaluation=evaluation_data,
+                supabase_manager=supabase_manager
+            )
+            
+            # Update knowledge item mastery and explanation
+            supabase_manager.update_mastery(
+                knowledge_id=knowledge_id,
+                mastery=mastery_result['mastery'],
+                mastery_explanation=mastery_result['explanation']
+            )
             
             # Create evaluation response
             evaluation_response = EvaluationResponse(
@@ -245,20 +260,17 @@ async def evaluate_answers(request: BatchAnswerRequest):
                 feedback=evaluation['feedback'],
                 correct_points=evaluation['correct_points'],
                 incorrect_points=evaluation['incorrect_points'],
-                improvement_suggestions=evaluation['improvement_suggestions'],
-                evaluation_id=stored_eval['id'] if stored_eval else None
+                evaluation_id=stored_eval['id'] if stored_eval else None,
+                knowledge_id=knowledge_id,
+                mastery=mastery_result['mastery'],
+                mastery_explanation=mastery_result['explanation']
             )
             
             evaluations.append(evaluation_response)
-            total_score += evaluation['score']
-        
-        # Calculate average score (now on 1-5 scale)
-        average_score = total_score / len(evaluations) if evaluations else 1.0
         
         return BatchEvaluationResponse(
             evaluations=evaluations,
-            total_evaluated=len(evaluations),
-            average_score=round(average_score, 2)
+            total_evaluated=len(evaluations)
         )
         
     except Exception as e:
