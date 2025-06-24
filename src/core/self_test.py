@@ -148,9 +148,8 @@ def evaluate_answer(question_text: str, answer: str, knowledge_content: str, mai
         Dictionary with evaluation results including score (1-5), feedback, etc.
     """
     # Evaluation prompt with 1-5 scale definition
-    prompt_template = '''You are evaluating an answer to a knowledge assessment question.
-Please evaluate the answer based on both the provided knowledge content AND your general knowledge.
-Be flexible - if the answer provides correct information that's not in the knowledge content but is accurate, it should get credit.
+    prompt_template = '''You are a helpful assistant that evaluates answers to knowledge assessment questions.
+Always respond with valid JSON in the specified format.
 
 Main Category: {main_category}
 Sub Category: {sub_category}
@@ -158,22 +157,29 @@ Question: {question}
 Your Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
-Score the answer on a scale of 1-5:
-1 = Not understood / Incorrect
-2 = Basic understanding with significant gaps
-3 = Moderate understanding
-4 = Good understanding with minor gaps
-5 = Complete mastery
+CRITICAL - Answer Completeness Check:
+1. First identify ALL parts of what was asked in the question
+2. Check if EACH part was properly addressed in the answer
+3. Example: If question asks "explain X and give example", both parts must be present
+4. Missing ANY major part of the question should result in score ≤ 3
 
-Requirements for evaluation:
-1. Score must be an integer from 1 to 5
-2. Provide specific feedback on strengths and weaknesses
-3. Consider both factual accuracy and depth of understanding
-4. Give partial credit for partially correct answers
-5. Reward demonstration of understanding over memorization
-6. Consider additional correct information even if not in reference content
-7. Explain the scoring rationale clearly
-8. Consider the knowledge category context when evaluating domain-specific answers
+Score the answer on a scale of 1-5 using these strict guidelines:
+1 = Not understood / Incorrect / Completely off-topic
+2 = Basic understanding but significant parts missing or incorrect
+3 = Moderate understanding, some key parts missing or superficial
+4 = Good understanding with minor gaps or imperfections
+5 = ONLY if ALL of these are true:
+   - ALL parts of the question were fully addressed
+   - ALL explanations are thorough and accurate
+   - ALL requested examples/applications provided
+   - Shows deep understanding beyond basic facts
+
+Scoring Guidelines:
+- Missing any major asked-for component: Maximum score 3
+- Only basic definitions without asked-for explanations: Maximum score 2
+- No examples when examples were requested: Maximum score 3
+- Incorrect or missing real-world applications: Reduce score by at least 1
+- Superficial answers to multi-part questions: Maximum score 3
 
 Format your response as a JSON object with this structure:
 {{
@@ -181,6 +187,18 @@ Format your response as a JSON object with this structure:
     "feedback": "Detailed feedback explaining strengths, weaknesses, and specific suggestions for improvement...",
     "correct_points": ["Point 1 that was correct", "Point 2 that was correct", ...],
     "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...]
+}}
+
+Example response for incomplete answer:
+{{
+    "score": 2,
+    "feedback": "The answer only provides the basic formula F = ma without explaining the relationships or providing the requested real-world example. The definition is correct but lacks depth and application.",
+    "correct_points": ["Correctly stated Newton's second law formula"],
+    "incorrect_points": [
+        "No explanation of relationship between force, mass, and acceleration",
+        "Missing requested real-world example",
+        "No analysis of different scenarios as asked in question"
+    ]
 }}'''
 
     try:
@@ -252,21 +270,37 @@ Knowledge Content:
 Evaluation History (from most recent to oldest):
 {evaluation_history}
 
-Requirements for mastery calculation:
-1. Output a single mastery number between 0 and 1
-2. Consider both breadth (concept coverage) and depth (quality of understanding)
-3. Recent evaluations should matter more than older ones
-4. Perfect scores (5/5) on multiple evaluations indicate strong mastery
-5. IMPORTANT - Concept Coverage Analysis:
-   - First identify all key concepts in the knowledge content
-   - Check if the questions and answers together cover ALL these concepts
-   - Even with perfect scores, if some key concepts were never tested, mastery cannot be 1.0
-   - Example: If knowledge has concepts A, B, C but questions only tested A and B, max mastery should be around 0.67
-6. To achieve mastery = 1.0, ALL of these must be true:
-   - Questions and answers must cover ALL key concepts from the knowledge content
-   - Must demonstrate understanding of each concept
-   - Must have consistently high scores
-   - Recent performance must be strong
+CRITICAL - Answer Quality Analysis:
+1. For each answer, check:
+   - Were ALL parts of the question addressed?
+   - Were explanations thorough or superficial?
+   - Were requested examples/applications provided?
+   - Was understanding demonstrated or just memorization?
+2. Ignore any provided scores or feedback - assess only the raw question and answer
+3. If an answer is missing major components, those concepts count as untested
+4. Example: Answer only stating "F = ma" for a question asking about relationships and examples
+   shows mastery of only basic definition (0.2) not relationships or applications
+
+CRITICAL - Concept Coverage Analysis:
+1. First identify ALL key concepts in the knowledge content
+2. For each concept, check:
+   - Has it been tested in any question?
+   - Was the answer complete for that concept?
+   - Was understanding demonstrated or just memorization?
+3. Calculate concept coverage:
+   - Untested concepts count as 0
+   - Partially tested concepts (incomplete answers) count as 0.5
+   - Fully tested concepts with good answers count as 1
+4. Example: If knowledge has 4 concepts but only 2 were fully tested and 1 partially,
+   max mastery would be (2 + 0.5) / 4 = 0.625
+
+Mastery Level Guidelines:
+0.0-0.2: Only basic definitions/memorization
+0.2-0.4: Some concepts understood but major gaps
+0.4-0.6: Moderate understanding, some concepts untested
+0.6-0.8: Good understanding, minor gaps or concepts untested
+0.8-1.0: Strong understanding across all concepts
+1.0: ONLY if ALL concepts fully tested with strong understanding
 
 Format your response as a JSON object with this structure:
 {{
@@ -276,24 +310,18 @@ Format your response as a JSON object with this structure:
 
 Example response:
 {{
-    "mastery": 0.85,
-    "explanation": "Strong performance (5/5) on recent tests covering concepts X and Y. However, concept Z from the knowledge content hasn't been tested yet, preventing full mastery score."
+    "mastery": 0.35,
+    "explanation": "Answer shows only basic definition mastery (F = ma). Of 4 key concepts (formula, relationships, applications, examples), only formula was demonstrated. Missing explanations and examples that were explicitly requested in the question."
 }}'''
 
     try:
-        # Format evaluation history
+        # Format evaluation history - only include question and answer
         eval_history = ""
         for i, eval in enumerate(evaluations):
             eval_history += f"""
 Evaluation {i+1}:
 Question: {eval.get('question_text', '')}
 Answer: {eval.get('answer_text', '')}
-Score: {eval.get('score', 0)}/5
-Feedback: {eval.get('feedback', '')}
-Correct Points:
-{chr(10).join(f"- {point}" for point in eval.get('correct_points', []))}
-Incorrect/Missing Points:
-{chr(10).join(f"- {point}" for point in eval.get('incorrect_points', []))}
 """
         
         # Format prompt with actual content
