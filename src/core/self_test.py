@@ -273,14 +273,13 @@ Evaluation History (from most recent to oldest):
 CRITICAL - Answer Quality Analysis:
 1. For each answer:
    - First verify if the answer is correct according to the knowledge content
+   - Consider the feedback and points but make your own assessment
    - Were ALL parts of the question addressed?
    - Were explanations thorough or superficial?
    - Were requested examples/applications provided?
    - Was understanding demonstrated or just memorization?
-2. Ignore any provided scores or feedback - assess only the raw question and answer
-3. If an answer is missing major components or contains incorrect information, those concepts count as untested/unmastered
-4. Example: Answer only stating "F = ma" for a question asking about relationships and examples
-   shows mastery of only basic definition (0.2) not relationships or applications
+2. Make your own assessment of the answer quality - don't just rely on the provided feedback
+3. If an answer contains incorrect information, that concept's mastery should reflect the severity of the error
 
 CRITICAL - Concept Coverage Analysis:
 1. First identify ALL key concepts in the knowledge content
@@ -323,13 +322,19 @@ Example response:
 }}'''
 
     try:
-        # Format evaluation history - only include question and answer
+        # Format evaluation history - include feedback and points but emphasize independent assessment
         eval_history = ""
         for i, eval in enumerate(evaluations):
             eval_history += f"""
 Evaluation {i+1}:
 Question: {eval.get('question_text', '')}
 Answer: {eval.get('answer_text', '')}
+Feedback Points:
+Correct:
+{chr(10).join(f"- {point}" for point in eval.get('correct_points', []))}
+Needs Improvement:
+{chr(10).join(f"- {point}" for point in eval.get('incorrect_points', []))}
+Previous Feedback: {eval.get('feedback', '')}
 """
         
         # Format prompt with actual content
