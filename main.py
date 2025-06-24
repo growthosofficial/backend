@@ -95,7 +95,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],  # Only GET and POST for read-only + recommendations
+    allow_methods=["GET", "POST", "OPTIONS"],  # Only GET and POST for read-only + recommendations
     allow_headers=["*"],
 )
 
