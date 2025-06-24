@@ -78,7 +78,7 @@ class BatchEvaluationResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateQuestionsResponse)
 async def generate_questions(
-    num_questions: int = Query(default=5, ge=1, le=20, description="Number of questions to generate")
+    num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate")
 ):
     """
     Generate questions from the knowledge base.
@@ -116,7 +116,7 @@ async def generate_questions(
         
         # Randomly select items to generate questions from
         selected_items = random.sample(valid_items, min(num_questions, len(valid_items)))
-        
+
         # Generate questions for each selected item
         questions = []
         categories_covered = set()
@@ -128,7 +128,11 @@ async def generate_questions(
             knowledge_id = item['id']  # Already validated as positive integer
             
             # Generate question using our dedicated function
-            question_data = generate_question(category, content)
+            question_data = generate_question(
+                category=category,
+                content=content,
+                knowledge_id=knowledge_id
+            )
             
             if question_data:
                 # Create Question object

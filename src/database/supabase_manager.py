@@ -355,6 +355,33 @@ class SupabaseManager:
             print(f"Error in create_evaluation: {e}")
             return None
 
+    def get_evaluations(self, knowledge_id: int) -> Dict:
+        """
+        Get the 3 most recent evaluations for a specific knowledge item
+        
+        Args:
+            knowledge_id: ID of the knowledge item
+            
+        Returns:
+            Dictionary containing list of most recent evaluations with their questions, answers, feedback and points
+        """
+        try:
+            # Get 3 most recent evaluations for this knowledge item
+            result = self.supabase.table('evaluations')\
+                .select('question_text,answer_text,feedback,correct_points,incorrect_points')\
+                .eq('knowledge_id', knowledge_id)\
+                .order('created_at', desc=True)\
+                .limit(3)\
+                .execute()
+            
+            return {
+                "evaluations": result.data if result.data else []
+            }
+            
+        except Exception as e:
+            print(f"Error getting evaluations: {e}")
+            return {"evaluations": []}
+
 
 # Create global instance
 supabase_manager = SupabaseManager()

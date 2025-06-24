@@ -32,23 +32,55 @@ def call_azure_openai(prompt: str) -> str:
     
     return response.choices[0].message.content or ""
 
-def generate_question(category: str, content: str) -> Optional[Dict]:
+def generate_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
     """
     Generate a thought-provoking question for a given knowledge item
     
     Args:
         category: Knowledge category
         content: Knowledge content to generate question from
+        knowledge_id: Optional ID to analyze past evaluation patterns
         
     Returns:
         Dictionary with question_text if successful, None if failed
     """
+    evaluation_context = ""
+    if knowledge_id:
+        try:
+            from database.supabase_manager import supabase_manager
+            patterns = supabase_manager.get_evaluations(knowledge_id)
+            if patterns and patterns["evaluations"]:
+                # Format previous evaluations for the prompt
+                eval_examples = patterns["evaluations"]  # Already limited to 3 most recent
+                evaluation_context = "Previous question-answer examples:\n"
+                for eval in eval_examples:
+                    evaluation_context += f"""
+Question: {eval['question_text']}
+Answer: {eval['answer_text']}
+Feedback: {eval['feedback']}
+What was correct:
+{chr(10).join(f"- {point}" for point in eval['correct_points'])}
+What was incorrect/missing:
+{chr(10).join(f"- {point}" for point in eval['incorrect_points'])}
+"""
+        except Exception as e:
+            print(f"Error getting evaluation patterns: {e}")
+            # Continue without evaluation data if there's an error
+            pass
+
     # Question generation prompt template
     prompt_template = '''Generate 1 thought-provoking, open-ended question based on this knowledge content. 
 The question should test deep understanding and critical thinking, not just memorization.
 
 Knowledge Category: {category}
 Content: {content}
+
+{evaluation_context}
+
+QUESTION GENERATION PRIORITIES:
+1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create a question that specifically addresses these gaps in understanding
+2. SECOND PRIORITY: Look for important concepts in the knowledge content that haven't been covered by the previous questions shown above
+3. Only if no incorrect points or uncovered content: Create a question that approaches previously covered concepts from a new angle
 
 Requirements for the question:
 1. Focus on the most important concepts in order of relevance to the user's understanding
@@ -61,6 +93,8 @@ Requirements for the question:
 8. IMPORTANT: Question should be answerable in about 3 sentences - don't try to cover too many points if it would require a longer explanation
 
 Example approach:
+- First check the incorrect/missing points from previous answers and prioritize those topics
+- Then scan the knowledge content for important concepts not yet questioned
 - If the content has multiple concepts, pick the 1-2 most important ones that can be explained together concisely
 - If there are examples in the content, use them to ground the question but don't make the question solely about the example
 - If there are technical details, focus on their practical implications rather than memorization
@@ -75,7 +109,8 @@ Format your response as a JSON object with this structure:
         # Format prompt with actual content
         prompt = prompt_template.format(
             category=category,
-            content=content
+            content=content,
+            evaluation_context=evaluation_context
         )
         
         # Get response from Azure OpenAI
@@ -98,7 +133,7 @@ Format your response as a JSON object with this structure:
         print(f"Error generating question for category {category}: {e}")
         return None
 
-def evaluate_answer(question_text: str, answer: str, knowledge_content: str, category: str) -> Dict:
+def evaluate_answer(question_text: str, answer: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
     """
     Evaluate a user's answer to a question using Azure OpenAI
     
@@ -106,7 +141,8 @@ def evaluate_answer(question_text: str, answer: str, knowledge_content: str, cat
         question_text: The original question text
         answer: The user's answer to evaluate
         knowledge_content: The knowledge content the question was based on
-        category: The knowledge category for additional context
+        main_category: The main knowledge category (e.g. Physics)
+        sub_category: The sub category (e.g. Quantum Mechanics)
         
     Returns:
         Dictionary with evaluation results including score (1-5), feedback, etc.
@@ -116,7 +152,8 @@ def evaluate_answer(question_text: str, answer: str, knowledge_content: str, cat
 Please evaluate the answer based on both the provided knowledge content AND your general knowledge.
 Be flexible - if the answer provides correct information that's not in the knowledge content but is accurate, it should get credit.
 
-Knowledge Category: {category}
+Main Category: {main_category}
+Sub Category: {sub_category}
 Question: {question}
 Your Answer: {answer}
 Reference Knowledge Content: {knowledge}
@@ -141,16 +178,16 @@ Requirements for evaluation:
 Format your response as a JSON object with this structure:
 {{
     "score": <integer 1-5>,
-    "feedback": "Detailed feedback explaining strengths and weaknesses...",
+    "feedback": "Detailed feedback explaining strengths, weaknesses, and specific suggestions for improvement...",
     "correct_points": ["Point 1 that was correct", "Point 2 that was correct", ...],
-    "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...],
-    "improvement_suggestions": "Specific suggestions for improvement..."
+    "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...]
 }}'''
 
     try:
         # Format prompt with actual content
         prompt = prompt_template.format(
-            category=category,
+            main_category=main_category,
+            sub_category=sub_category,
             question=question_text,
             answer=answer,
             knowledge=knowledge_content
@@ -163,8 +200,7 @@ Format your response as a JSON object with this structure:
         result = json.loads(response)
         
         # Validate evaluation response
-        required_fields = ["score", "feedback", "correct_points", "incorrect_points", 
-                         "improvement_suggestions"]
+        required_fields = ["score", "feedback", "correct_points", "incorrect_points"]
         for field in required_fields:
             if field not in result:
                 print(f"Error: Response missing {field} field")
@@ -172,8 +208,7 @@ Format your response as a JSON object with this structure:
                     "score": 1,
                     "feedback": "Error in evaluation response",
                     "correct_points": [],
-                    "incorrect_points": ["Error processing response"],
-                    "improvement_suggestions": "Please try again"
+                    "incorrect_points": ["Error processing response"]
                 }
         
         # Ensure score is integer 1-5
@@ -186,8 +221,7 @@ Format your response as a JSON object with this structure:
             "score": 1,
             "feedback": f"Error processing response: {str(e)}",
             "correct_points": [],
-            "incorrect_points": ["Error processing response"],
-            "improvement_suggestions": "Please try again"
+            "incorrect_points": ["Error processing response"]
         }
     except Exception as e:
         print(f"Error in evaluation: {e}")
@@ -195,6 +229,5 @@ Format your response as a JSON object with this structure:
             "score": 1,
             "feedback": f"Error: {str(e)}",
             "correct_points": [],
-            "incorrect_points": ["Error processing response"],
-            "improvement_suggestions": "Please try again"
+            "incorrect_points": ["Error processing response"]
         }
