@@ -172,69 +172,67 @@ async def health_check():
 
 # MAIN FEATURE: AI-POWERED RECOMMENDATION GENERATION
 
-@app.post("/api/process-text", response_model=ProcessTextResponse, tags=["AI Recommendations"])
+@app.post("/api/process-text", response_model=ProcessTextResponse, tags=["Semantic AI Processing"])
 async def process_text(request: ProcessTextRequest):
-    """
-    **MAIN ENDPOINT**: Process input text and generate AI recommendations.
-    
-    This endpoint:
-    1. Analyzes input text using semantic similarity (SSC)
-    2. Generates 3 AI-powered recommendations using Azure OpenAI (LLMUpdater)
-    3. Returns structured recommendations for frontend to handle
-    
-    Frontend will apply selected recommendations to database.
-    """
-    start_time = datetime.now()
-    
     try:
-        cleaned_text = request.text.strip()
-        if not cleaned_text:
-            raise HTTPException(status_code=400, detail="Text input cannot be empty")
+        # Step 1: Check for similar existing knowledge
+        most_similar = SSC(request.text, request.threshold)
         
-        logger.info(f"Processing text: {cleaned_text[:100]}...")
-        
-        # 1. Find most similar existing knowledge using SSC
-        similar_item = SSC(cleaned_text, request.threshold)
-        
-        # 2. Generate 3 AI recommendations using LLMUpdater
-        recommendations_data = LLMUpdater(cleaned_text, similar_item, "azure_openai")
-        
-        # 3. Format recommendations for frontend
-        recommendations = []
-        for rec_data in recommendations_data:
-            recommendation = RecommendationResponse(
-                option_number=rec_data.get("option_number", len(recommendations) + 1),
-                change=rec_data["change"],
-                updated_text=rec_data["updated_text"],
-                main_category=rec_data["main_category"],
-                sub_category=rec_data["sub_category"],
-                tags=rec_data.get("tags", []),
-                preview=rec_data.get("preview", rec_data["updated_text"][:100] + "..." if len(rec_data["updated_text"]) > 100 else rec_data["updated_text"])
-            )
-            recommendations.append(recommendation)
-        
-        # 4. Create response
-        response = ProcessTextResponse(
-            recommendations=recommendations,
-            similar_main_category=similar_item.get("main_category") if similar_item else None,
-            similar_sub_category=similar_item.get("sub_category") if similar_item else None,
-            similarity_score=similar_item.get("similarity_score") if similar_item else None,
-            status="success"
+        # Step 2: Get AI recommendations with goal context
+        recommendations_raw = LLMUpdater(
+            input_text=request.text, 
+            existing_knowledge=most_similar, 
+            goal=request.goal,  # Pass the goal parameter
+            llm_type="azure_openai"
         )
         
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/process-text", "POST", 200, duration)
+        # Step 3: Format recommendations for frontend
+        formatted_recommendations = []
+        for rec in recommendations_raw:
+            recommendation = RecommendationResponse(
+                option_number=rec['option_number'],
+                change=rec['change'],
+                updated_text=rec['updated_text'],
+                main_category=rec['main_category'],
+                sub_category=rec['sub_category'],
+                tags=rec.get('tags', []),
+                preview=rec['preview'],
+                action_type=rec['action_type'],
+                reasoning=rec['reasoning'],
+                semantic_coherence=rec['semantic_coherence'],
+                is_goal_aware=rec['is_goal_aware']
+            )
+            
+            # Add goal-specific fields if present
+            if rec.get('is_goal_aware') and request.goal:
+                recommendation.relevance_score = rec.get('relevance_score')
+                recommendation.goal_alignment = rec.get('goal_alignment')
+                recommendation.goal_priority = rec.get('goal_priority')
+            
+            formatted_recommendations.append(recommendation)
         
-        logger.info(f"✅ Generated {len(recommendations)} recommendations for frontend")
-        return response
+        # Generate goal summary if goal was provided
+        goal_summary = None
+        if request.goal:
+            goal_aware_recs = [r for r in recommendations_raw if r.get('is_goal_aware')]
+            if goal_aware_recs:
+                avg_relevance = sum(r.get('relevance_score', 5) for r in goal_aware_recs) / len(goal_aware_recs)
+                high_priority_count = sum(1 for r in goal_aware_recs if r.get('goal_priority') == 'high')
+                high_coherence_count = sum(1 for r in recommendations_raw if r.get('semantic_coherence') == 'high')
+                goal_summary = f"Goal relevance: {avg_relevance:.1f}/10 avg. {high_priority_count} high-priority, {high_coherence_count} high-coherence recommendations."
         
-    except HTTPException:
-        raise
+        return ProcessTextResponse(
+            recommendations=formatted_recommendations,
+            similar_main_category=most_similar['main_category'] if most_similar else None,
+            similar_sub_category=most_similar['sub_category'] if most_similar else None,
+            similarity_score=most_similar['similarity_score'] if most_similar else None,
+            goal_provided=bool(request.goal),
+            goal_summary=goal_summary,
+            status="success"
+        )
+    
     except Exception as e:
-        logger.error(f"Text processing failed: {e}")
-        duration = (datetime.now() - start_time).total_seconds()
-        log_api_call("/api/process-text", "POST", 500, duration)
-        raise HTTPException(status_code=500, detail=f"Text processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process text: {str(e)}")
 
 
 # READ-ONLY DATA ENDPOINTS FOR FRONTEND
