@@ -271,13 +271,14 @@ Evaluation History (from most recent to oldest):
 {evaluation_history}
 
 CRITICAL - Answer Quality Analysis:
-1. For each answer, check:
+1. For each answer:
+   - First verify if the answer is correct according to the knowledge content
    - Were ALL parts of the question addressed?
    - Were explanations thorough or superficial?
    - Were requested examples/applications provided?
    - Was understanding demonstrated or just memorization?
 2. Ignore any provided scores or feedback - assess only the raw question and answer
-3. If an answer is missing major components, those concepts count as untested
+3. If an answer is missing major components or contains incorrect information, those concepts count as untested/unmastered
 4. Example: Answer only stating "F = ma" for a question asking about relationships and examples
    shows mastery of only basic definition (0.2) not relationships or applications
 
@@ -285,14 +286,21 @@ CRITICAL - Concept Coverage Analysis:
 1. First identify ALL key concepts in the knowledge content
 2. For each concept, check:
    - Has it been tested in any question?
-   - Was the answer complete for that concept?
+   - Was the answer complete and correct for that concept?
    - Was understanding demonstrated or just memorization?
-3. Calculate concept coverage:
+3. Calculate concept coverage continuously:
    - Untested concepts count as 0
-   - Partially tested concepts (incomplete answers) count as 0.5
-   - Fully tested concepts with good answers count as 1
-4. Example: If knowledge has 4 concepts but only 2 were fully tested and 1 partially,
-   max mastery would be (2 + 0.5) / 4 = 0.625
+   - For tested concepts, assign a mastery level between 0-1 based on:
+     * Correctness of the answer
+     * Completeness of explanation
+     * Depth of understanding shown
+     * Application/examples if requested
+4. Example: If knowledge has 4 concepts:
+   - Concept 1: Untested = 0
+   - Concept 2: Basic correct definition but shallow = 0.3
+   - Concept 3: Good explanation but minor gaps = 0.8
+   - Concept 4: Perfect understanding with examples = 1.0
+   Final mastery would be (0 + 0.3 + 0.8 + 1.0) / 4 = 0.525
 
 Mastery Level Guidelines:
 0.0-0.2: Only basic definitions/memorization
@@ -311,7 +319,7 @@ Format your response as a JSON object with this structure:
 Example response:
 {{
     "mastery": 0.35,
-    "explanation": "Answer shows only basic definition mastery (F = ma). Of 4 key concepts (formula, relationships, applications, examples), only formula was demonstrated. Missing explanations and examples that were explicitly requested in the question."
+    "explanation": "Answer shows only basic definition mastery (F = ma) and contains some inaccuracies. Of 4 key concepts (formula, relationships, applications, examples), only formula was demonstrated. Missing explanations and examples that were explicitly requested in the question."
 }}'''
 
     try:
