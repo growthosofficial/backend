@@ -89,7 +89,7 @@ cors_origins = os.getenv("CORS_ORIGINS", '["http://localhost:3000", "http://loca
 try:
     origins = json.loads(cors_origins)
 except json.JSONDecodeError:
-    origins = ["http://localhost:3000", "http://localhost:5173"]
+    origins = ["http://localhost:3000", "http://localhost:5173","https://growthos-one.vercel.app/"]
 
 app.add_middleware(
     CORSMiddleware,
