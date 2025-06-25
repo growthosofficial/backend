@@ -250,13 +250,14 @@ Example response for incomplete answer:
             "incorrect_points": ["Error processing response"]
         }
 
-def calculate_mastery_with_llm(knowledge_content: str, evaluations: List[Dict]) -> Dict:
+def calculate_mastery_with_llm(knowledge_content: str, evaluations: List[Dict], current_mastery: float) -> Dict:
     """
     Calculate mastery level using LLM by analyzing evaluation history
     
     Args:
         knowledge_content: The full content of the knowledge item
         evaluations: List of evaluation records, each containing question, answer, score, feedback, etc.
+        current_mastery: Current mastery level of the knowledge item
         
     Returns:
         Dictionary with mastery level (0-1) and explanation
@@ -266,6 +267,8 @@ Always respond with valid JSON in the specified format.
 
 Knowledge Content:
 {knowledge_content}
+
+Current Mastery Level: {current_mastery}
 
 Evaluation History (from most recent to oldest):
 {evaluation_history}
@@ -294,31 +297,29 @@ CRITICAL - Concept Coverage Analysis:
      * Completeness of explanation
      * Depth of understanding shown
      * Application/examples if requested
-4. Example: If knowledge has 4 concepts:
-   - Concept 1: Untested = 0
-   - Concept 2: Basic correct definition but shallow = 0.3
-   - Concept 3: Good explanation but minor gaps = 0.8
-   - Concept 4: Perfect understanding with examples = 1.0
-   Final mastery would be (0 + 0.3 + 0.8 + 1.0) / 4 = 0.525
 
-Mastery Level Guidelines:
-0.0-0.2: Only basic definitions/memorization
-0.2-0.4: Some concepts understood but major gaps
-0.4-0.6: Moderate understanding, some concepts untested
-0.6-0.8: Good understanding, minor gaps or concepts untested
-0.8-1.0: Strong understanding across all concepts
-1.0: ONLY if ALL concepts fully tested with strong understanding
+CRITICAL - Mastery Level Adjustment:
+1. Compare new mastery assessment with current mastery level ({current_mastery})
+2. If new answers show improvement:
+   - Increase mastery proportionally to the improvement shown
+   - Major improvements can increase mastery significantly
+3. If new answers show decline:
+   - Decrease mastery to reflect the current level of understanding
+   - Recent incorrect answers should impact mastery more than old correct ones
+4. If answers are mixed:
+   - Weight recent performance more heavily
+   - Consider the complexity of concepts being tested
 
 Format your response as a JSON object with this structure:
 {{
     "mastery": <float between 0 and 1>,
-    "explanation": "Brief explanation of why this mastery level was assigned"
+    "explanation": "Brief explanation of why this mastery level was assigned, including how it changed from previous mastery of {current_mastery}"
 }}
 
 Example response:
 {{
     "mastery": 0.35,
-    "explanation": "Answer shows only basic definition mastery (F = ma) and contains some inaccuracies. Of 4 key concepts (formula, relationships, applications, examples), only formula was demonstrated. Missing explanations and examples that were explicitly requested in the question."
+    "explanation": "Previous mastery was {current_mastery}. New evaluation shows only basic definition mastery and contains inaccuracies. Of 4 key concepts, only formula was demonstrated. Missing explanations and examples that were explicitly requested."
 }}'''
 
     try:
@@ -340,7 +341,8 @@ Previous Feedback: {eval.get('feedback', '')}
         # Format prompt with actual content
         prompt = prompt_template.format(
             knowledge_content=knowledge_content,
-            evaluation_history=eval_history
+            evaluation_history=eval_history,
+            current_mastery=current_mastery
         )
         
         # Get response from Azure OpenAI
@@ -437,9 +439,9 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
         Dictionary with mastery level (0-1) and explanation
     """
     try:
-        # Get knowledge item content
+        # Get knowledge item content and current mastery
         knowledge_result = supabase_manager.supabase.table('knowledge_items')\
-            .select('content')\
+            .select('content,mastery')\
             .eq('id', knowledge_id)\
             .single()\
             .execute()
@@ -453,6 +455,7 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
             }
         
         knowledge_content = knowledge_result.data.get('content', '')
+        current_mastery = knowledge_result.data.get('mastery', 0.0)
         
         # Get recent evaluations ordered by date
         eval_result = supabase_manager.supabase.table('evaluations')\
@@ -470,7 +473,8 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
         # Calculate mastery using LLM
         mastery_result = calculate_mastery_with_llm(
             knowledge_content=knowledge_content,
-            evaluations=evaluations
+            evaluations=evaluations,
+            current_mastery=current_mastery  # Pass current mastery to LLM
         )
         
         return mastery_result
