@@ -32,6 +32,7 @@ cp .env.example .env
 ```
 
 Required environment variables:
+
 - `AZURE_OPENAI_API_KEY`: Your Azure OpenAI API key
 - `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI endpoint URL
 - `AZURE_OPENAI_DEPLOYMENT_NAME`: Your GPT-4 deployment name
@@ -46,6 +47,7 @@ python main.py
 ```
 
 The API will be available at:
+
 - API: http://localhost:8000
 - Documentation: http://localhost:8000/docs
 - Health Check: http://localhost:8000/health
@@ -53,10 +55,12 @@ The API will be available at:
 ## API Endpoints
 
 ### Core Processing
+
 - `POST /api/process-text` - Process text and get AI recommendations with two-tier categorization
 - `GET /health` - Health check for database and Azure OpenAI API
 
 ### Knowledge Management (Read-Only)
+
 - `GET /api/knowledge` - Get all knowledge items
 - `GET /api/knowledge/category/{main_category}` - Get knowledge items by academic subject
 - `GET /api/categories` - Get all categories grouped by academic subject
@@ -64,10 +68,12 @@ The API will be available at:
 - `GET /api/search?q={term}` - Search knowledge items by content
 
 ### Self-Test & Assessment
+
 - `POST /api/self-test/generate` - Generate questions from knowledge base
 - `POST /api/self-test/evaluate` - Evaluate answers and get detailed feedback
 
 ### Analytics & Statistics
+
 - `GET /api/stats` - Get comprehensive database statistics
 - `GET /api/analytics/strength-distribution` - Get knowledge strength score distribution
 - `GET /api/analytics/category-strength` - Get strength analysis by academic category
@@ -78,6 +84,7 @@ The API will be available at:
 The self-test system provides AI-powered knowledge assessment capabilities:
 
 ### Question Generation
+
 Generate thought-provoking questions from your knowledge base:
 
 ```bash
@@ -86,6 +93,7 @@ curl -X POST "http://localhost:8000/api/self-test/generate?num_questions=5" \
 ```
 
 **Response:**
+
 ```json
 {
   "questions": [
@@ -102,6 +110,7 @@ curl -X POST "http://localhost:8000/api/self-test/generate?num_questions=5" \
 ```
 
 ### Answer Evaluation
+
 Submit answers for AI-powered evaluation with detailed feedback:
 
 ```bash
@@ -119,6 +128,7 @@ curl -X POST "http://localhost:8000/api/self-test/evaluate" \
 ```
 
 **Response:**
+
 ```json
 {
   "evaluations": [
@@ -131,10 +141,7 @@ curl -X POST "http://localhost:8000/api/self-test/evaluate" \
         "Correctly identified particle correlation",
         "Mentioned instantaneous state changes"
       ],
-      "incorrect_points": [
-        "Could elaborate more on measurement effects"
-      ],
-      "improvement_suggestions": "Consider discussing Bell's theorem and experimental verification",
+      "incorrect_points": ["Could elaborate more on measurement effects"],
       "evaluation_id": 456
     }
   ],
@@ -146,6 +153,7 @@ curl -X POST "http://localhost:8000/api/self-test/evaluate" \
 ## Core Functions
 
 ### Semantic Similarity Core (SSC)
+
 ```python
 def SSC(input_text: str, threshold: float = 0.8) -> Optional[Dict]:
     # Compares input with stored embeddings using cosine similarity
@@ -153,16 +161,18 @@ def SSC(input_text: str, threshold: float = 0.8) -> Optional[Dict]:
 ```
 
 ### LLM Updater
+
 ```python
 def LLMUpdater(input_text: str, existing_item: Optional[Dict]) -> List[Dict]:
     # Generates 3 different AI recommendations:
     # 1. Merge/Update approach
-    # 2. Replace/Revise approach  
+    # 2. Replace/Revise approach
     # 3. New Category approach
     # Each with proper academic subject categorization
 ```
 
 ### Self-Test Functions
+
 ```python
 def generate_question(category: str, content: str) -> Optional[Dict]:
     # Generates thought-provoking questions using Azure OpenAI
@@ -178,6 +188,7 @@ def evaluate_answer(question_text: str, answer: str, knowledge_content: str, cat
 The system uses academic subject-based categorization:
 
 ### Main Categories (Academic Subjects)
+
 - **STEM**: Mathematics, Physics, Chemistry, Biology, Computer Science, Engineering, Medicine, etc.
 - **Social Sciences**: Psychology, Sociology, Economics, Political Science, etc.
 - **Humanities**: History, Philosophy, Literature, Languages, Religious Studies, etc.
@@ -185,6 +196,7 @@ The system uses academic subject-based categorization:
 - **Arts & Creative**: Visual Arts, Music, Creative Writing, Film Studies, etc.
 
 ### Sub-Categories
+
 Specific topics within each academic subject (e.g., "quantum mechanics applications", "Renaissance art techniques", "startup financial modeling")
 
 ## Project Structure
@@ -219,6 +231,7 @@ backend/
 ## Database Schema
 
 ### Knowledge Items Table
+
 ```sql
 CREATE TABLE knowledge_items (
     id SERIAL PRIMARY KEY,
@@ -240,6 +253,7 @@ CREATE TABLE knowledge_items (
 ```
 
 ### Evaluations Table
+
 ```sql
 CREATE TABLE evaluations (
     id SERIAL PRIMARY KEY,
@@ -250,7 +264,6 @@ CREATE TABLE evaluations (
     feedback TEXT NOT NULL,
     correct_points TEXT[] DEFAULT '{}',
     incorrect_points TEXT[] DEFAULT '{}',
-    improvement_suggestions TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
 ```
@@ -258,6 +271,7 @@ CREATE TABLE evaluations (
 ## Example Usage
 
 ### Process Text with Academic Categorization
+
 ```bash
 curl -X POST "http://localhost:8000/api/process-text" \
 -H "Content-Type: application/json" \
@@ -268,12 +282,14 @@ curl -X POST "http://localhost:8000/api/process-text" \
 ```
 
 ### Generate Self-Test Questions
+
 ```bash
 curl -X POST "http://localhost:8000/api/self-test/generate?num_questions=3" \
 -H "Content-Type: application/json"
 ```
 
 ### Evaluate Learning Progress
+
 ```bash
 curl -X POST "http://localhost:8000/api/self-test/evaluate" \
 -H "Content-Type: application/json" \
@@ -289,6 +305,7 @@ curl -X POST "http://localhost:8000/api/self-test/evaluate" \
 ```
 
 ### Get Academic Subject Statistics
+
 ```bash
 curl "http://localhost:8000/api/analytics/category-strength"
 ```
@@ -296,6 +313,7 @@ curl "http://localhost:8000/api/analytics/category-strength"
 ## Configuration
 
 ### Environment Variables
+
 - `AZURE_OPENAI_API_KEY`: Required for embeddings and GPT-4
 - `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI service endpoint
 - `AZURE_OPENAI_DEPLOYMENT_NAME`: GPT-4 deployment name
@@ -308,13 +326,16 @@ curl "http://localhost:8000/api/analytics/category-strength"
 - `LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
 
 ### CORS Configuration
+
 The API is configured to allow connections from:
+
 - http://localhost:3000 (React dev server)
 - http://localhost:5173 (Vite dev server)
 
 ## Self-Test Features
 
 ### Question Generation
+
 - **AI-Powered**: Uses Azure OpenAI to generate thought-provoking questions
 - **Content-Based**: Questions are generated from your actual knowledge base
 - **Customizable**: Specify number of questions (1-20)
@@ -322,6 +343,7 @@ The API is configured to allow connections from:
 - **Deep Learning Focus**: Questions test understanding, not just memorization
 
 ### Answer Evaluation
+
 - **Intelligent Scoring**: 1-5 scale based on understanding depth
 - **Detailed Feedback**: Specific strengths and weaknesses identified
 - **Improvement Suggestions**: Actionable advice for better understanding
@@ -329,6 +351,7 @@ The API is configured to allow connections from:
 - **Progress Tracking**: Evaluations stored for learning analytics
 
 ### Learning Analytics
+
 - **Performance Tracking**: Monitor learning progress over time
 - **Category Analysis**: Identify strong and weak subject areas
 - **Strength Distribution**: Visualize knowledge mastery levels
@@ -337,6 +360,7 @@ The API is configured to allow connections from:
 ## Error Handling
 
 The API includes comprehensive error handling:
+
 - Input validation with detailed error messages
 - Azure OpenAI API error handling (rate limits, authentication)
 - Database connection and operation errors
@@ -346,6 +370,7 @@ The API includes comprehensive error handling:
 ## Logging
 
 All API requests and errors are logged with:
+
 - Request method and endpoint
 - Response status code
 - Request duration
@@ -387,14 +412,17 @@ This project is part of the Second Brain Knowledge Management System.
 ## Self-Test API Reference
 
 ### POST /api/self-test/generate
+
 Generate questions from knowledge base.
 
 **Parameters:**
+
 - `num_questions` (query, optional): Number of questions (1-20, default: 5)
 
 **Response:** List of questions with metadata
 
 ### POST /api/self-test/evaluate
+
 Evaluate submitted answers with AI feedback.
 
 **Body:** Array of answers with question context

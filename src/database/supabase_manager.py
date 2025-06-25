@@ -336,24 +336,77 @@ class SupabaseManager:
         
         return category_analysis
 
-    def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
+    def update_mastery(self, knowledge_id: int, mastery: float, mastery_explanation: str = "") -> None:
+        """
+        Update the mastery level and explanation of a knowledge item
+        
+        Args:
+            knowledge_id: ID of the knowledge item
+            mastery: Mastery level between 0 and 1
+            mastery_explanation: Explanation of how the mastery was calculated
+        """
         try:
-            evaluation = {
-                "knowledge_id": evaluation_data["knowledge_id"],
-                "question_text": evaluation_data["question_text"],
-                "answer_text": evaluation_data["answer_text"],
-                "score": evaluation_data["score"],
-                "feedback": evaluation_data["feedback"],
-                "improvement_suggestions": evaluation_data["improvement_suggestions"],
-                "correct_points": evaluation_data["correct_points"],
-                "incorrect_points": evaluation_data["incorrect_points"],
-            }
-            # Insert evaluation with points as arrays
-            result = self.supabase.table('evaluations').insert(evaluation).execute()
+            # Ensure mastery is between 0 and 1
+            mastery = max(0, min(1, mastery))
+            mastery = round(mastery, 2)
+            
+            # Update mastery and explanation
+            self.supabase.table('knowledge_items')\
+                .update({
+                    'mastery': mastery,
+                    'mastery_explanation': mastery_explanation
+                })\
+                .eq('id', knowledge_id)\
+                .execute()
+                
+        except Exception as e:
+            print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
+
+    def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
+        """
+        Create a new evaluation record
+        
+        Args:
+            evaluation_data: Dictionary containing evaluation data
+            
+        Returns:
+            Created evaluation record or None if failed
+        """
+        try:
+            # Create evaluation record
+            result = self.supabase.table('evaluations').insert(evaluation_data).execute()
             return result.data[0] if result.data else None
+            
         except Exception as e:
             print(f"Error in create_evaluation: {e}")
             return None
+
+    def get_evaluations(self, knowledge_id: int) -> Dict:
+        """
+        Get the 3 most recent evaluations for a specific knowledge item
+        
+        Args:
+            knowledge_id: ID of the knowledge item
+            
+        Returns:
+            Dictionary containing list of most recent evaluations with their questions, answers, feedback and points
+        """
+        try:
+            # Get 3 most recent evaluations for this knowledge item
+            result = self.supabase.table('evaluations')\
+                .select('question_text,answer_text,feedback,correct_points,incorrect_points')\
+                .eq('knowledge_id', knowledge_id)\
+                .order('created_at', desc=True)\
+                .limit(3)\
+                .execute()
+            
+            return {
+                "evaluations": result.data if result.data else []
+            }
+            
+        except Exception as e:
+            print(f"Error getting evaluations: {e}")
+            return {"evaluations": []}
 
 
 # Create global instance
