@@ -250,13 +250,14 @@ Example response for incomplete answer:
             "incorrect_points": ["Error processing response"]
         }
 
-def calculate_mastery_with_llm(knowledge_content: str, evaluations: List[Dict], current_mastery: float) -> Dict:
+def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
     """
     Calculate mastery level using LLM by analyzing evaluation history
     
     Args:
         knowledge_content: The full content of the knowledge item
-        evaluations: List of evaluation records, each containing question, answer, score, feedback, etc.
+        new_evaluation: The current evaluation being analyzed
+        previous_evaluations: List of previous evaluation records
         current_mastery: Current mastery level of the knowledge item
         
     Returns:
@@ -270,7 +271,18 @@ Knowledge Content:
 
 Current Mastery Level: {current_mastery}
 
-Evaluation History (from most recent to oldest):
+Previous Feedback: {new_eval_feedback}
+
+NEW EVALUATION:
+Question: {new_eval_question}
+Answer: {new_eval_answer}
+Feedback Points:
+Correct:
+{new_eval_correct}
+Needs Improvement:
+{new_eval_incorrect}
+
+Previous Evaluation History (from most recent to oldest):
 {evaluation_history}
 
 CRITICAL - Answer Quality Analysis:
@@ -300,14 +312,14 @@ CRITICAL - Concept Coverage Analysis:
 
 CRITICAL - Mastery Level Adjustment:
 1. Compare new mastery assessment with current mastery level ({current_mastery})
-2. If new answers show improvement:
+2. If new evaluation shows improvement:
    - Increase mastery proportionally to the improvement shown
    - Major improvements can increase mastery significantly
-3. If new answers show decline:
+3. If new evaluation shows decline:
    - Decrease mastery to reflect the current level of understanding
    - Recent incorrect answers should impact mastery more than old correct ones
-4. If answers are mixed:
-   - Weight recent performance more heavily
+4. If mixed performance:
+   - Weight the new evaluation more heavily than previous ones
    - Consider the complexity of concepts being tested
 
 Format your response as a JSON object with this structure:
@@ -323,11 +335,11 @@ Example response:
 }}'''
 
     try:
-        # Format evaluation history - include feedback and points but emphasize independent assessment
+        # Format evaluation history
         eval_history = ""
-        for i, eval in enumerate(evaluations):
+        for i, eval in enumerate(previous_evaluations, 1):
             eval_history += f"""
-Evaluation {i+1}:
+Evaluation {i}:
 Question: {eval.get('question_text', '')}
 Answer: {eval.get('answer_text', '')}
 Feedback Points:
@@ -341,8 +353,13 @@ Previous Feedback: {eval.get('feedback', '')}
         # Format prompt with actual content
         prompt = prompt_template.format(
             knowledge_content=knowledge_content,
-            evaluation_history=eval_history,
-            current_mastery=current_mastery
+            current_mastery=current_mastery,
+            new_eval_question=new_evaluation.get('question_text', ''),
+            new_eval_answer=new_evaluation.get('answer_text', ''),
+            new_eval_correct=chr(10).join(f"- {point}" for point in new_evaluation.get('correct_points', [])),
+            new_eval_incorrect=chr(10).join(f"- {point}" for point in new_evaluation.get('incorrect_points', [])),
+            new_eval_feedback=new_evaluation.get('feedback', ''),
+            evaluation_history=eval_history
         )
         
         # Get response from Azure OpenAI
@@ -350,7 +367,7 @@ Previous Feedback: {eval.get('feedback', '')}
         if not response:
             print("Empty response from Azure OpenAI")
             return {
-                "mastery": 0.8 if evaluations and evaluations[0].get('score', 0) == 5 else 0.4,
+                "mastery": 0.8 if new_evaluation.get('score', 0) == 5 else 0.4,
                 "explanation": "Error getting LLM analysis, using score-based fallback"
             }
         
@@ -406,7 +423,7 @@ Previous Feedback: {eval.get('feedback', '')}
             print(f"Error parsing mastery calculation response: {e}")
             print(f"Raw response: {response}")
             # Fallback: Use a score-based calculation
-            latest_score = evaluations[0].get('score', 0) if evaluations else 0
+            latest_score = new_evaluation.get('score', 0)
             return {
                 "mastery": min(1.0, latest_score / 5.0),  # Convert 5-point score to 0-1 scale
                 "explanation": "Error in LLM analysis, using score-based fallback"
@@ -414,16 +431,11 @@ Previous Feedback: {eval.get('feedback', '')}
         
     except Exception as e:
         print(f"Error in mastery calculation: {e}")
-        # Fallback: Use a score-based calculation if we have evaluations
-        if evaluations:
-            latest_score = evaluations[0].get('score', 0)
-            return {
-                "mastery": min(1.0, latest_score / 5.0),
-                "explanation": "Error in LLM analysis, using score-based fallback"
-            }
+        # Fallback: Use a score-based calculation
+        latest_score = new_evaluation.get('score', 0)
         return {
-            "mastery": 0.0,
-            "explanation": f"Error: {str(e)}"
+            "mastery": min(1.0, latest_score / 5.0),
+            "explanation": "Error in LLM analysis, using score-based fallback"
         }
 
 def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_manager) -> Dict:
@@ -465,16 +477,15 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
             .limit(5)\
             .execute()
         
-        # Prepare evaluations list with current evaluation first
-        evaluations = [current_evaluation]  # Current evaluation
-        if eval_result.data:
-            evaluations.extend(eval_result.data)  # Previous evaluations
+        # Get previous evaluations
+        previous_evaluations = eval_result.data if eval_result.data else []
         
         # Calculate mastery using LLM
         mastery_result = calculate_mastery_with_llm(
             knowledge_content=knowledge_content,
-            evaluations=evaluations,
-            current_mastery=current_mastery  # Pass current mastery to LLM
+            new_evaluation=current_evaluation,
+            previous_evaluations=previous_evaluations,
+            current_mastery=current_mastery
         )
         
         return mastery_result
