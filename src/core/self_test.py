@@ -2,12 +2,13 @@
 Self-test generation and evaluation using Azure OpenAI for the Second Brain Knowledge Management System.
 """
 import json
+import time
 import openai
 from typing import Dict, Optional, List
 
 from config.settings import settings
 
-def call_azure_openai(prompt: str) -> str:
+def call_azure_openai(prompt: str, prompt_name: str) -> str:
     """Call Azure OpenAI API for question generation"""
     if not settings.AZURE_OPENAI_API_KEY:
         raise ValueError("AZURE_OPENAI_API_KEY not found")
@@ -21,6 +22,7 @@ def call_azure_openai(prompt: str) -> str:
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
     )
     
+    start_time = time.time()
     response = client.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
         messages=[
@@ -29,6 +31,8 @@ def call_azure_openai(prompt: str) -> str:
         ],
         temperature=0.7
     )
+    end_time = time.time()
+    print(f"[TIMING] ⏱️ {prompt_name}: {(end_time - start_time):.2f}s")
     
     return response.choices[0].message.content or ""
 
@@ -114,7 +118,7 @@ Format your response as a JSON object with this structure:
         )
         
         # Get response from Azure OpenAI
-        response = call_azure_openai(prompt)
+        response = call_azure_openai(prompt, "Question Generation")
         
         # Parse response
         question_data = json.loads(response)
@@ -212,7 +216,7 @@ Example response for incomplete answer:
         )
         
         # Get response from Azure OpenAI
-        response = call_azure_openai(prompt)
+        response = call_azure_openai(prompt, "Answer Evaluation")
         
         # Parse response
         result = json.loads(response)
@@ -363,7 +367,7 @@ Previous Feedback: {eval.get('feedback', '')}
         )
         
         # Get response from Azure OpenAI
-        response = call_azure_openai(prompt)
+        response = call_azure_openai(prompt, "Mastery Calculation")
         if not response:
             print("Empty response from Azure OpenAI")
             return {
@@ -480,7 +484,6 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
         # Get previous evaluations
         previous_evaluations = eval_result.data if eval_result.data else []
         
-        # Calculate mastery using LLM
         mastery_result = calculate_mastery_with_llm(
             knowledge_content=knowledge_content,
             new_evaluation=current_evaluation,
