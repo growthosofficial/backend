@@ -1,14 +1,22 @@
 """
 Self-test generation and assessment logic for the Second Brain Knowledge Management System.
 """
-from enum import Enum
 from typing import List
-from pydantic import BaseModel, Field
 import random
 from fastapi import APIRouter, HTTPException, status, Query, Path
 
 from database.supabase_manager import supabase_manager
-from core.self_test import generate_question, evaluate_answer, get_knowledge_mastery
+from core.self_test import (
+    generate_free_text_question, 
+    generate_multiple_choice_question,
+    evaluate_answer, 
+    get_knowledge_mastery
+)
+from models import (
+    QuestionType, Question, GenerateQuestionsResponse, AnswerRequest, EvaluationResponse,
+    BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
+    MultipleChoiceQuestion, GenerateMultipleChoiceResponse
+)
 
 # Create router
 router = APIRouter(
@@ -16,70 +24,14 @@ router = APIRouter(
     tags=["Knowledge Assessment"]
 )
 
-# Models
-class QuestionType(str, Enum):
-    """Type of quiz question"""
-    MULTIPLE_CHOICE = "multiple_choice"
-    OPEN_ENDED = "open_ended"
-
-class Question(BaseModel):
-    """Question model for self-test feature"""
-    question_text: str = Field(..., description="The question text")
-    main_category: str = Field(..., description="Main knowledge category")
-    sub_category: str = Field(..., description="Sub category within the main category")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-    answer: str = Field("", description="The answer to evaluate (empty for question generation)")
-
-class GenerateQuestionsResponse(BaseModel):
-    """Response model for question generation"""
-    questions: List[Question] = Field(..., description="List of generated questions")
-    total_questions: int = Field(..., description="Total number of questions generated")
-
-class AnswerRequest(BaseModel):
-    """Request model for submitting an answer"""
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item")
-    question_text: str = Field(..., min_length=1, description="The question being answered")
-    answer: str = Field(..., min_length=1, description="The user's answer to evaluate")
-
-class EvaluationResponse(BaseModel):
-    """Response model for answer evaluation"""
-    question_text: str = Field(..., description="The original question that was asked")
-    answer: str = Field(..., description="Your submitted answer")
-    score: int = Field(..., ge=1, le=5, description="Score from 1-5")
-    feedback: str = Field(..., description="Overall feedback on the answer")
-    correct_points: List[str] = Field(default_factory=list, description="Points that were correct")
-    incorrect_points: List[str] = Field(default_factory=list, description="Points that were incorrect or missing")
-    evaluation_id: int | None = Field(None, description="Database ID of the stored evaluation")
-    knowledge_id: int = Field(..., description="ID of the knowledge item")
-    mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
-    mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
-    sample_answer: str | None = Field(None, description="An example of a good answer to this question")
-
-class BatchAnswerRequest(BaseModel):
-    """Request model for submitting multiple answers"""
-    answers: List[AnswerRequest] = Field(..., description="List of answers to evaluate")
-
-class BatchEvaluationResponse(BaseModel):
-    """Response model for batch answer evaluation"""
-    evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
-    total_evaluated: int = Field(..., description="Total number of answers evaluated")
-
-class EvaluationHistoryResponse(BaseModel):
-    """Response model for evaluation history"""
-    evaluations: List[EvaluationResponse]
-    knowledge_id: int
-    total_evaluations: int
-    average_score: float
-    current_mastery: float
-    mastery_explanation: str
-
-@router.post("/generate", response_model=GenerateQuestionsResponse)
-async def generate_questions(
+# Free Text Question Endpoints
+@router.post("/free-text/generate", response_model=GenerateQuestionsResponse)
+async def generate_free_text_questions(
     num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate"),
     main_category: str | None = Query(default=None, description="Optional main category to filter questions by")
 ):
     """
-    Generate questions from the knowledge base.
+    Generate free text questions from the knowledge base.
     Questions will be evaluated by ChatGPT later.
     
     This endpoint:
@@ -133,7 +85,7 @@ async def generate_questions(
             knowledge_id = item['id']  # Already validated as positive integer
             
             # Generate question using our dedicated function
-            question_data = generate_question(
+            question_data = generate_free_text_question(
                 category=item_main_category,  # Pass main category for backwards compatibility
                 content=content,
                 knowledge_id=knowledge_id
@@ -167,10 +119,10 @@ async def generate_questions(
             detail=f"Error generating questions: {str(e)}"
         )
 
-@router.post("/evaluate", response_model=BatchEvaluationResponse)
-async def evaluate_answers(request: BatchAnswerRequest):
+@router.post("/free-text/evaluate", response_model=BatchEvaluationResponse)
+async def evaluate_free_text_answers(request: BatchAnswerRequest):
     """
-    Evaluate multiple answers to questions and store results.
+    Evaluate multiple free text answers to questions and store results.
     
     This endpoint:
     1. Takes a list of answers with their corresponding knowledge IDs and questions
@@ -283,6 +235,119 @@ async def evaluate_answers(request: BatchAnswerRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error evaluating answers: {str(e)}"
+        )
+
+# Multiple Choice Question Endpoints
+@router.post("/multiple-choice/generate", response_model=GenerateMultipleChoiceResponse)
+async def generate_multiple_choice_questions(
+    num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate"),
+    main_category: str | None = Query(default=None, description="Optional main category to filter questions by")
+):
+    """
+    Generate multiple choice questions from the knowledge base.
+    Questions will be evaluated by ChatGPT later.
+    
+    This endpoint:
+    1. Retrieves random knowledge items from the database
+    2. Uses Azure OpenAI to generate thought-provoking multiple choice questions
+    3. Returns questions with their knowledge_id for later evaluation
+    
+    Args:
+        num_questions: Number of questions to generate (1-20)
+        main_category: Optional main category to filter questions by
+    """
+    try:
+        # Get knowledge items, optionally filtered by main category
+        knowledge_items = supabase_manager.load_all_knowledge(main_category=main_category)
+        if not knowledge_items:
+            error_msg = "No knowledge items found in database"
+            if main_category:
+                error_msg = f"No knowledge items found for category: {main_category}"
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=error_msg
+            )
+        
+        # Filter out items without valid numeric IDs
+        valid_items = []
+        for item in knowledge_items:
+            try:
+                item['id'] = int(item['id'])  # Convert ID to integer
+                if item['id'] > 0:  # Ensure positive ID
+                    valid_items.append(item)
+            except (ValueError, TypeError, KeyError):
+                continue
+        
+        if not valid_items:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No knowledge items with valid IDs found"
+            )
+        
+        # Randomly select items to generate questions from
+        selected_items = random.sample(valid_items, min(num_questions, len(valid_items)))
+
+        # Generate questions for each selected item
+        questions_to_create = []
+        
+        for item in selected_items:
+            # Get categories and content
+            item_main_category = item.get('main_category', 'Unknown')
+            content = item.get('content', '')
+            knowledge_id = item['id']  # Already validated as positive integer
+            
+            # Generate multiple choice question using our dedicated function
+            question_data = generate_multiple_choice_question(
+                category=item_main_category,
+                content=content,
+                knowledge_id=knowledge_id
+            )
+            
+            if question_data:
+                questions_to_create.append({
+                    "question_text": question_data['question_text'],
+                    "options": question_data['options'],
+                    "correct_answer_index": question_data['correct_answer_index'],
+                    "explanation": question_data['explanation'],
+                    "knowledge_id": knowledge_id
+                })
+        
+        if not questions_to_create:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate any valid multiple choice questions"
+            )
+        
+        # Store questions in database in batch
+        db_questions = supabase_manager.create_multiple_choice_questions(questions_to_create)
+        if not db_questions:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to store multiple choice questions"
+            )
+        
+        # Create response objects
+        questions = [
+            MultipleChoiceQuestion(
+                id=q['id'],
+                question_text=q['question_text'],
+                options=q['options'],
+                correct_answer_index=q['correct_answer_index'],
+                explanation=q['explanation'],
+                knowledge_id=q['knowledge_id']
+            )
+            for q in db_questions
+        ]
+        
+        return GenerateMultipleChoiceResponse(
+            questions=questions,
+            total_questions=len(questions)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating multiple choice questions: {str(e)}"
         )
 
 @router.get("/evaluations/{knowledge_id}", response_model=EvaluationHistoryResponse)

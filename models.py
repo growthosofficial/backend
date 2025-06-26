@@ -1,6 +1,97 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from enum import Enum
+from pydantic import validator
+
+
+# SELF-TEST MODELS
+
+class QuestionType(str, Enum):
+    """Type of quiz question"""
+    MULTIPLE_CHOICE = "multiple_choice"
+    FREE_TEXT = "free_text"
+
+class Question(BaseModel):
+    """Question model for self-test feature"""
+    question_text: str = Field(..., description="The question text")
+    main_category: str = Field(..., description="Main knowledge category")
+    sub_category: str = Field(..., description="Sub category within the main category")
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
+    answer: str = Field("", description="The answer to evaluate (empty for question generation)")
+    question_type: QuestionType = Field(default=QuestionType.FREE_TEXT, description="Type of question (multiple choice or free text)")
+
+class MultipleChoiceQuestion(BaseModel):
+    """Model for multiple choice questions"""
+    id: int = Field(..., description="Database ID of the question")
+    question_text: str = Field(..., description="The question text")
+    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
+    correct_answer_index: int = Field(..., ge=0, le=3, description="Index of correct answer (0-3)")
+    explanation: str = Field(..., description="Explanation of correct answer and distractors")
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
+
+    @validator('options')
+    def validate_options(cls, v):
+        if len(v) != 4:
+            raise ValueError('Must have exactly 4 options')
+        return v
+
+class GenerateQuestionsResponse(BaseModel):
+    """Response model for question generation"""
+    questions: List[Question] = Field(..., description="List of generated questions")
+    total_questions: int = Field(..., description="Total number of questions generated")
+
+class GenerateMultipleChoiceResponse(BaseModel):
+    """Response model for multiple choice question generation"""
+    questions: List[MultipleChoiceQuestion] = Field(..., description="List of generated multiple choice questions")
+    total_questions: int = Field(..., description="Total number of questions generated")
+
+class AnswerRequest(BaseModel):
+    """Request model for submitting an answer"""
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item")
+    question_text: str = Field(..., min_length=1, description="The question being answered")
+    answer: str = Field(..., min_length=1, description="The user's answer to evaluate")
+
+class MultipleChoiceAnswerRequest(BaseModel):
+    """Request model for submitting a multiple choice answer"""
+    question_id: int = Field(..., gt=0, description="ID of the multiple choice question")
+    selected_answer_index: int = Field(..., ge=0, le=3, description="Index of selected option (0-3)")
+
+class MultipleChoiceBatchAnswerRequest(BaseModel):
+    """Request model for submitting multiple multiple choice answers"""
+    answers: List[MultipleChoiceAnswerRequest] = Field(..., description="List of answers to evaluate")
+
+class EvaluationResponse(BaseModel):
+    """Response model for answer evaluation"""
+    question_text: str = Field(..., description="The original question that was asked")
+    answer: str = Field(..., description="Your submitted answer")
+    score: int = Field(..., ge=1, le=5, description="Score from 1-5")
+    feedback: str = Field(..., description="Overall feedback on the answer")
+    correct_points: List[str] = Field(default_factory=list, description="Points that were correct")
+    incorrect_points: List[str] = Field(default_factory=list, description="Points that were incorrect or missing")
+    evaluation_id: int | None = Field(None, description="Database ID of the stored evaluation")
+    knowledge_id: int = Field(..., description="ID of the knowledge item")
+    mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
+    mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
+    sample_answer: str | None = Field(None, description="An example of a good answer to this question")
+
+class BatchAnswerRequest(BaseModel):
+    """Request model for submitting multiple answers"""
+    answers: List[AnswerRequest] = Field(..., description="List of answers to evaluate")
+
+class BatchEvaluationResponse(BaseModel):
+    """Response model for batch answer evaluation"""
+    evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
+    total_evaluated: int = Field(..., description="Total number of answers evaluated")
+
+class EvaluationHistoryResponse(BaseModel):
+    """Response model for evaluation history"""
+    evaluations: List[EvaluationResponse]
+    knowledge_id: int
+    total_evaluations: int
+    average_score: float
+    current_mastery: float
+    mastery_explanation: str
 
 
 # REQUEST MODELS (for processing only)

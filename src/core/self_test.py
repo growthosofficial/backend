@@ -6,6 +6,7 @@ import time
 import openai
 from typing import Dict, Optional, List
 
+from models import QuestionType
 from config.settings import settings
 
 def call_azure_openai(prompt: str, prompt_name: str) -> str:
@@ -36,9 +37,9 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
     
     return response.choices[0].message.content or ""
 
-def generate_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
+def generate_free_text_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
     """
-    Generate a thought-provoking question for a given knowledge item
+    Generate a thought-provoking free text question for a given knowledge item
     
     Args:
         category: Knowledge category
@@ -62,10 +63,6 @@ def generate_question(category: str, content: str, knowledge_id: Optional[int] =
 Question: {eval['question_text']}
 Answer: {eval['answer_text']}
 Feedback: {eval['feedback']}
-What was correct:
-{chr(10).join(f"- {point}" for point in eval['correct_points'])}
-What was incorrect/missing:
-{chr(10).join(f"- {point}" for point in eval['incorrect_points'])}
 """
         except Exception as e:
             print(f"Error getting evaluation patterns: {e}")
@@ -301,8 +298,8 @@ Example responses:
         # Format evaluation history
         eval_history = ""
         for i, eval in enumerate(previous_evaluations, 1):
-            eval_type = eval.get('question_type', 'free_text')
-            if eval_type == 'multiple_choice':
+            eval_type = eval.get('question_type', QuestionType.FREE_TEXT)
+            if eval_type == QuestionType.MULTIPLE_CHOICE:
                 eval_history += f"""
 Q{i} (Multiple Choice): {eval.get('question_text', '')}
 Selected: {eval.get('selected_answer', '')} | Correct: {eval.get('correct_answer', '')}"""
@@ -312,7 +309,7 @@ Q{i} (Free Text): {eval.get('question_text', '')}
 A{i}: {eval.get('answer_text', '')}"""
         
         # Format the current answer based on type
-        if new_evaluation.get('question_type') == 'multiple_choice':
+        if new_evaluation.get('question_type') == QuestionType.MULTIPLE_CHOICE:
             current_answer = f"Selected: {new_evaluation.get('selected_answer', '')} | Correct: {new_evaluation.get('correct_answer', '')}"
         else:
             current_answer = new_evaluation.get('answer_text', '')
@@ -321,7 +318,7 @@ A{i}: {eval.get('answer_text', '')}"""
         prompt = prompt_template.format(
             knowledge_content=knowledge_content,
             current_mastery=current_mastery,
-            question_type=new_evaluation.get('question_type', 'free_text'),
+            question_type=new_evaluation.get('question_type', QuestionType.FREE_TEXT),
             new_eval_question=new_evaluation.get('question_text', ''),
             new_eval_answer=current_answer,
             evaluation_history=eval_history
@@ -440,3 +437,116 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
             "mastery": score_based_mastery,
             "explanation": f"Using current evaluation score as mastery due to error: {str(e)}"
         }
+
+def generate_multiple_choice_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
+    """
+    Generate a multiple choice question for a given knowledge item
+    
+    Args:
+        category: Knowledge category
+        content: Knowledge content to generate question from
+        knowledge_id: Optional ID to analyze past evaluation patterns
+        
+    Returns:
+        Dictionary with question_text, options, and correct_answer if successful, None if failed
+    """
+    evaluation_context = ""
+    if knowledge_id:
+        try:
+            from database.supabase_manager import supabase_manager
+            patterns = supabase_manager.get_evaluations(knowledge_id)
+            if patterns and patterns["evaluations"]:
+                eval_examples = patterns["evaluations"]
+                evaluation_context = "Previous question-answer examples:\n"
+                for eval in eval_examples:
+                    evaluation_context += f"""
+Question: {eval['question_text']}
+Answer: {eval['answer_text']}
+Feedback: {eval['feedback']}
+"""
+        except Exception as e:
+            print(f"Error getting evaluation patterns: {e}")
+            pass
+
+    prompt_template = '''Generate 1 multiple choice question based on this knowledge content.
+The question should test understanding and application, not just memorization.
+
+Knowledge Category: {category}
+Content: {content}
+
+{evaluation_context}
+
+QUESTION GENERATION PRIORITIES:
+1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create a question that specifically addresses these gaps
+2. SECOND PRIORITY: Look for important concepts that haven't been covered by previous questions
+3. Only if no incorrect points or uncovered content: Create a question that approaches previously covered concepts from a new angle
+
+Requirements:
+1. Question should test understanding and application of concepts
+2. Options should be plausible but clearly distinguishable
+3. Include exactly 4 options (indexed 0-3)
+4. One and only one option should be correct
+5. Distractors (wrong options) should be:
+   - Plausible but clearly incorrect
+   - Based on common misconceptions
+   - Similar in length and style to correct answer
+   - Not obviously wrong or joke answers
+6. All options should be:
+   - Similar in length
+   - Grammatically consistent with question
+   - Clear and unambiguous
+   - Independent of each other
+
+Format your response as a JSON object with this structure:
+{{
+    "question_text": "Your thought-provoking multiple choice question here...",
+    "options": [
+        "First option text here",
+        "Second option text here",
+        "Third option text here",
+        "Fourth option text here"
+    ],
+    "correct_answer_index": <number 0-3>,
+    "explanation": "Detailed explanation of why the correct answer is correct and why each distractor is incorrect"
+}}'''
+
+    try:
+        # Format prompt with actual content
+        prompt = prompt_template.format(
+            category=category,
+            content=content,
+            evaluation_context=evaluation_context
+        )
+        
+        # Get response from Azure OpenAI
+        response = call_azure_openai(prompt, "Multiple Choice Question Generation")
+        
+        # Parse response
+        question_data = json.loads(response)
+        
+        # Validate response has required fields
+        required_fields = ["question_text", "options", "correct_answer_index", "explanation"]
+        for field in required_fields:
+            if field not in question_data:
+                print(f"Error: Response missing {field} field for category {category}")
+                return None
+                
+        # Validate options and correct answer
+        if len(question_data["options"]) != 4:
+            print(f"Error: Expected 4 options, got {len(question_data['options'])}")
+            return None
+            
+        if not isinstance(question_data["correct_answer_index"], int) or \
+           question_data["correct_answer_index"] < 0 or \
+           question_data["correct_answer_index"] > 3:
+            print(f"Error: Invalid correct_answer_index: {question_data['correct_answer_index']}")
+            return None
+            
+        return question_data
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing question response for category {category}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error generating question for category {category}: {e}")
+        return None
