@@ -151,14 +151,12 @@ def evaluate_answer(question_text: str, answer: str, knowledge_content: str, mai
     Returns:
         Dictionary with evaluation results including score (1-5), feedback, etc.
     """
-    # Evaluation prompt with 1-5 scale definition
-    prompt_template = '''You are a helpful assistant that evaluates answers to knowledge assessment questions.
-Always respond with valid JSON in the specified format.
+    prompt_template = '''You are an evaluator assessing answers to knowledge questions. Respond with valid JSON only.
 
 Main Category: {main_category}
 Sub Category: {sub_category}
 Question: {question}
-Your Answer: {answer}
+Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
 CRITICAL - Answer Completeness Check:
@@ -194,31 +192,16 @@ Also provide a sample answer that would score 5/5. The sample answer should:
 
 Format your response as a JSON object with this structure:
 {{
-    "score": <integer 1-5>,
-    "feedback": "Detailed feedback explaining strengths, weaknesses, and specific suggestions for improvement...",
-    "correct_points": ["Point 1 that was correct", "Point 2 that was correct", ...],
-    "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...],
-    "sample_answer": "A well-structured example answer that would score 5/5..."
-}}
-
-Example response for incomplete answer:
-{{
-    "score": 2,
-    "feedback": "The answer only provides the basic formula F = ma without explaining the relationships or providing the requested real-world example. The definition is correct but lacks depth and application.",
-    "correct_points": ["Correctly stated Newton's second law formula"],
-    "incorrect_points": [
-        "No explanation of relationship between force, mass, and acceleration",
-        "Missing requested real-world example",
-        "No analysis of different scenarios as asked in question"
-    ],
-    "sample_answer": "Newton's second law (F = ma) describes the fundamental relationship between force, mass, and acceleration. When a force acts on an object, it produces an acceleration that is directly proportional to the force and inversely proportional to the object's mass. For example, when pushing a shopping cart, the same force will produce a larger acceleration with an empty cart (less mass) compared to a full cart (more mass). This relationship explains why it's harder to push a heavy object than a light one, and why the same force results in different accelerations depending on the mass of the object."
+    "score": <1-5>,
+    "feedback": "Clear explanation of strengths/weaknesses. Use you to refer to the user.",
+    "correct_points": ["Point 1", "Point 2"],
+    "incorrect_points": ["Missing/wrong point 1", "Missing/wrong point 2"],
+    "sample_answer": "Brief but complete answer showing mastery"
 }}'''
 
     try:
         # Format prompt with actual content
         prompt = prompt_template.format(
-            main_category=main_category,
-            sub_category=sub_category,
             question=question_text,
             answer=answer,
             knowledge=knowledge_content
@@ -279,58 +262,66 @@ def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, pre
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''Analyze your understanding based on your answer. Respond with valid JSON only.
+    prompt_template = '''Assess understanding and provide feedback. Respond with valid JSON only.
 
 Current Mastery: {current_mastery}
 
-New Mastery Level Guidelines:
-- Good answers should gradually increase mastery (max 1.0)
-- Maintain current mastery for average answers.
-- Significantly decrease mastery only for very poor answers showing clear lack of understanding (e.g. "I don't know" or completely incorrect)
-- Current answer weights the most, and recent answers weigh more than older answers.
+Guidelines:
+- Free text answers show deeper understanding than multiple choice
+- Good explanations increase mastery more than correct recognition
+- Poor answers (especially "I don't know") decrease mastery
+- Consider answer quality and type when adjusting mastery
 
 Knowledge Content:
 {knowledge_content}
 
+Question Type: {question_type}
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Your Previous Answers (newest to oldest)
+Previous Answers (newest to oldest):
 {evaluation_history}
-
-Assessment Criteria:
-1. Answer Quality:
-   - Accuracy vs knowledge content
-   - Depth of understanding
-   - Original examples/applications
-   - Clear explanation
-
-2. Concept Coverage:
-   - Key concepts identified
-   - Completeness of explanation
-   - Understanding vs memorization
 
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "Detailed breakdown of what concepts you have mastered and what concepts you need to improve"
-}}'''
+    "explanation": "2-3 sentences describing: 1) How well you understand this topic 2) What you've demonstrated good knowledge of 3) What you need to work on"
+}}
+
+Example responses:
+"You have a good understanding of basic circuit components and Ohm's law. You can explain voltage and current flow clearly. You need to work on understanding parallel circuits and power calculations."
+
+"You show basic grasp of SQL queries and table joins. You can write simple SELECT statements but struggle with complex joins and subqueries. You should focus on practicing GROUP BY and aggregate functions."
+
+"You're still developing understanding of neural networks. You recognize basic terminology but can't explain backpropagation or activation functions. You need to review the fundamental concepts."'''
 
     try:
         # Format evaluation history
         eval_history = ""
         for i, eval in enumerate(previous_evaluations, 1):
-            eval_history += f"""
-Q{i}: {eval.get('question_text', '')}
-A{i}: {eval.get('answer_text', '')}
-"""
+            eval_type = eval.get('question_type', 'free_text')
+            if eval_type == 'multiple_choice':
+                eval_history += f"""
+Q{i} (Multiple Choice): {eval.get('question_text', '')}
+Selected: {eval.get('selected_answer', '')} | Correct: {eval.get('correct_answer', '')}"""
+            else:
+                eval_history += f"""
+Q{i} (Free Text): {eval.get('question_text', '')}
+A{i}: {eval.get('answer_text', '')}"""
+        
+        # Format the current answer based on type
+        if new_evaluation.get('question_type') == 'multiple_choice':
+            current_answer = f"Selected: {new_evaluation.get('selected_answer', '')} | Correct: {new_evaluation.get('correct_answer', '')}"
+        else:
+            current_answer = new_evaluation.get('answer_text', '')
         
         # Format prompt with actual content
         prompt = prompt_template.format(
             knowledge_content=knowledge_content,
             current_mastery=current_mastery,
+            question_type=new_evaluation.get('question_type', 'free_text'),
             new_eval_question=new_evaluation.get('question_text', ''),
-            new_eval_answer=new_evaluation.get('answer_text', ''),
+            new_eval_answer=current_answer,
             evaluation_history=eval_history
         )
         
