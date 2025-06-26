@@ -6,16 +6,20 @@ import random
 from fastapi import APIRouter, HTTPException, status, Query, Path
 
 from database.supabase_manager import supabase_manager
-from core.self_test import (
+from src.core.self_test import (
     generate_free_text_question, 
     generate_multiple_choice_question,
-    evaluate_answer, 
-    get_knowledge_mastery
+    evaluate_free_text_answer,
+    evaluate_multiple_choice_answers,
+    calculate_free_text_mastery,
+    calculate_multiple_choice_mastery
 )
 from models import (
     QuestionType, Question, GenerateQuestionsResponse, AnswerRequest, EvaluationResponse,
     BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
-    MultipleChoiceQuestion, GenerateMultipleChoiceResponse
+    MultipleChoiceQuestion, GenerateMultipleChoiceResponse, MultipleChoiceQuestionResponse,
+    MultipleChoiceAnswerRequest, MultipleChoiceBatchAnswerRequest,
+    MultipleChoiceBatchEvaluationResponse
 )
 
 # Create router
@@ -122,65 +126,56 @@ async def generate_free_text_questions(
 @router.post("/free-text/evaluate", response_model=BatchEvaluationResponse)
 async def evaluate_free_text_answers(request: BatchAnswerRequest):
     """
-    Evaluate multiple free text answers to questions and store results.
+    Evaluate a batch of free text answers and calculate mastery levels
     
-    This endpoint:
-    1. Takes a list of answers with their corresponding knowledge IDs and questions
-    2. Efficiently loads all required knowledge items at once
-    3. Evaluates each answer using Azure OpenAI
-    4. Stores evaluation results and updates mastery in the database
-    5. Returns detailed feedback, scores, mastery levels, and sample answers
+    Args:
+        request: BatchAnswerRequest containing list of answers to evaluate
+        
+    Returns:
+        BatchEvaluationResponse with evaluation results and mastery updates
     """
     try:
-        # Extract unique knowledge IDs
-        knowledge_ids = list(set(answer.knowledge_id for answer in request.answers))
-        
-        # Load all required knowledge items efficiently
-        knowledge_items = supabase_manager.load_knowledge_by_ids(knowledge_ids)
-        if not knowledge_items:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No knowledge items found for the provided IDs"
-            )
-        
-        # Index knowledge items by ID for efficient lookup
-        knowledge_map = {int(item['id']): item for item in knowledge_items}
-        
-        # Evaluate each answer
         evaluations = []
         
         for answer_request in request.answers:
             knowledge_id = answer_request.knowledge_id
             
-            # Get the knowledge item
-            knowledge_item = knowledge_map.get(knowledge_id)
-            if not knowledge_item:
+            # Get knowledge item content and current mastery
+            knowledge_result = supabase_manager.supabase.table('knowledge_items')\
+                .select('content,mastery,main_category,sub_category')\
+                .eq('id', knowledge_id)\
+                .single()\
+                .execute()
+            
+            if not knowledge_result.data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Knowledge item with ID {knowledge_id} not found"
+                    detail=f"Knowledge item {knowledge_id} not found"
                 )
             
-            # Get the knowledge content and category
-            knowledge_content = knowledge_item.get('content', '')
-            main_category = knowledge_item.get('main_category', 'Unknown')
-            sub_category = knowledge_item.get('sub_category', 'Unknown')
+            knowledge_content = knowledge_result.data.get('content', '')
+            current_mastery = knowledge_result.data.get('mastery', 0.0)
             
-            if not knowledge_content:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Knowledge item {knowledge_id} has no content"
-                )
+            # Get recent evaluations ordered by date
+            eval_result = supabase_manager.supabase.table('evaluations')\
+                .select('*')\
+                .eq('knowledge_id', knowledge_id)\
+                .order('created_at', desc=True)\
+                .limit(20)\
+                .execute()
+            
+            previous_evaluations = eval_result.data if eval_result.data else []
             
             # Evaluate the answer
-            evaluation = evaluate_answer(
+            evaluation = evaluate_free_text_answer(
                 question_text=answer_request.question_text,
                 answer=answer_request.answer,
                 knowledge_content=knowledge_content,
-                main_category=main_category,
-                sub_category=sub_category
+                main_category=knowledge_result.data.get('main_category', 'Unknown'),
+                sub_category=knowledge_result.data.get('sub_category', 'Unknown')
             )
             
-            # Create evaluation data
+            # Store evaluation in database
             evaluation_data = {
                 "knowledge_id": knowledge_id,
                 "question_text": answer_request.question_text,
@@ -188,17 +183,27 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 "score": evaluation['score'],
                 "feedback": evaluation['feedback'],
                 "correct_points": evaluation['correct_points'],
-                "incorrect_points": evaluation['incorrect_points']
+                "incorrect_points": evaluation['incorrect_points'],
+                "question_type": QuestionType.FREE_TEXT,
+                "sample_answer": evaluation.get('sample_answer')
             }
             
-            # Store evaluation in database
             stored_eval = supabase_manager.create_evaluation(evaluation_data)
             
-            # Calculate and update mastery
-            mastery_result = get_knowledge_mastery(
-                knowledge_id=knowledge_id,
-                current_evaluation=evaluation_data,
-                supabase_manager=supabase_manager
+            # Calculate mastery
+            mastery_result = calculate_free_text_mastery(
+                knowledge_content=knowledge_content,
+                new_evaluation={
+                    'question_text': answer_request.question_text,
+                    'answer_text': answer_request.answer,
+                    'score': evaluation['score'],
+                    'feedback': evaluation['feedback'],
+                    'correct_points': evaluation['correct_points'],
+                    'incorrect_points': evaluation['incorrect_points'],
+                    'question_type': QuestionType.FREE_TEXT
+                },
+                previous_evaluations=previous_evaluations,
+                current_mastery=current_mastery
             )
             
             # Update knowledge item mastery and explanation
@@ -221,7 +226,9 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 knowledge_id=knowledge_id,
                 mastery=mastery_result['mastery'],
                 mastery_explanation=mastery_result['explanation'],
-                sample_answer=evaluation.get('sample_answer')
+                sample_answer=evaluation.get('sample_answer'),
+                is_correct=None,  # Not applicable for free text
+                multiple_choice_question_id=None  # Not applicable for free text
             )
             
             evaluations.append(evaluation_response)
@@ -328,13 +335,12 @@ async def generate_multiple_choice_questions(
         
         # Create response objects
         questions = [
-            MultipleChoiceQuestion(
-                id=q['id'],
+            MultipleChoiceQuestionResponse(
+                question_id=q['id'],
                 question_text=q['question_text'],
                 options=q['options'],
-                correct_answer_index=q['correct_answer_index'],
-                explanation=q['explanation'],
-                knowledge_id=q['knowledge_id']
+                knowledge_id=q['knowledge_id'],
+                selected_answer_index=0
             )
             for q in db_questions
         ]
@@ -348,6 +354,175 @@ async def generate_multiple_choice_questions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating multiple choice questions: {str(e)}"
+        )
+
+@router.post("/multiple-choice/evaluate", response_model=MultipleChoiceBatchEvaluationResponse)
+async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatchAnswerRequest):
+    """
+    Evaluate a batch of multiple choice answers and calculate mastery levels
+    
+    Args:
+        request: MultipleChoiceBatchAnswerRequest containing list of answers to evaluate
+        
+    Returns:
+        MultipleChoiceBatchEvaluationResponse with evaluation results and mastery updates
+    """
+    try:
+        # Get all question IDs
+        question_ids = [answer.question_id for answer in request.answers]
+        
+        # Get questions from database
+        questions = supabase_manager.get_multiple_choice_questions(question_ids)
+        if not questions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No questions found for the provided IDs"
+            )
+            
+        # Index questions by ID for easy lookup
+        questions_map = {q['id']: q for q in questions}
+        
+        # Group answers by knowledge ID for efficient evaluation
+        knowledge_groups = {}
+        for answer in request.answers:
+            question = questions_map.get(answer.question_id)
+            if not question:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Question {answer.question_id} not found"
+                )
+            
+            knowledge_id = question['knowledge_id']
+            if knowledge_id not in knowledge_groups:
+                knowledge_groups[knowledge_id] = []
+            
+            knowledge_groups[knowledge_id].append({
+                'question': question,
+                'selected_index': answer.selected_answer_index
+            })
+        
+        # Get knowledge items for each group
+        knowledge_items = supabase_manager.load_knowledge_by_ids(list(knowledge_groups.keys()))
+        knowledge_map = {item['id']: item for item in knowledge_items}
+        
+        # Process each knowledge group
+        all_evaluations = []
+        
+        for knowledge_id, answers in knowledge_groups.items():
+            knowledge_item = knowledge_map.get(knowledge_id)
+            if not knowledge_item:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Knowledge item {knowledge_id} not found"
+                )
+            
+            # Get recent evaluations ordered by date
+            eval_result = supabase_manager.supabase.table('evaluations')\
+                .select('*')\
+                .eq('knowledge_id', knowledge_id)\
+                .order('created_at', desc=True)\
+                .limit(20)\
+                .execute()
+            
+            previous_evaluations = eval_result.data if eval_result.data else []
+            
+            # Format answers for evaluation
+            answer_texts = []
+            for i, answer in enumerate(answers):
+                question = answer['question']
+                selected_index = answer['selected_index']
+                is_correct = selected_index == question['correct_answer_index']
+                
+                answer_text = f"""
+-------------------------------
+Question {i+1}: {question['question_text']}
+Selected Answer: {question['options'][selected_index]}
+Correct Answer: {question['options'][question['correct_answer_index']]}
+-------------------------------
+"""
+                answer_texts.append(answer_text)
+            
+            # Get evaluation feedback for all answers in this group
+            evaluation = evaluate_multiple_choice_answers(
+                answers_text="\n---\n".join(answer_text.strip() for answer_text in answer_texts),
+                knowledge_content=knowledge_item.get('content', ''),
+                main_category=knowledge_item.get('main_category', 'Unknown'),
+                sub_category=knowledge_item.get('sub_category', 'Unknown')
+            )
+            
+            # Calculate mastery based on all answers in the group
+            mastery_result = calculate_multiple_choice_mastery(
+                knowledge_content=knowledge_item.get('content', ''),
+                new_evaluation={
+                    'question_text': 'Multiple Choice Questions',
+                    'answer_text': "\n---\n".join(answer_text.strip() for answer_text in answer_texts),
+                    'feedback': evaluation['feedback'],
+                    'question_type': QuestionType.MULTIPLE_CHOICE
+                },
+                previous_evaluations=previous_evaluations,
+                current_mastery=knowledge_item.get('mastery', 0.0)
+            )
+            
+            # Create evaluation records for each answer
+            for answer, eval_result in zip(answers, evaluation['evaluations']):
+                question = answer['question']
+                selected_index = answer['selected_index']
+                is_correct = selected_index == question['correct_answer_index']
+                
+                # Store evaluation in database
+                evaluation_data = {
+                    "knowledge_id": knowledge_id,
+                    "question_text": question['question_text'],
+                    "answer_text": question['options'][selected_index],
+                    "feedback": eval_result['explanation'],  # Use specific explanation for this answer
+                    "correct_points": [],  # No points for multiple choice
+                    "incorrect_points": [],  # No points for multiple choice
+                    "question_type": QuestionType.MULTIPLE_CHOICE,
+                    "is_correct": is_correct,
+                    "multiple_choice_question_id": question['id'],
+                    "mastery": mastery_result['mastery'],  # Add mastery from the calculation
+                    "mastery_explanation": mastery_result['explanation'],  # Add mastery explanation,
+                    "correct_answer": question['options'][question['correct_answer_index']]
+                }
+                
+                stored_eval = supabase_manager.create_evaluation(evaluation_data)
+                
+                # Create evaluation response
+                eval_response = EvaluationResponse(
+                    question_text=question['question_text'],
+                    answer=question['options'][selected_index],
+                    score=None,  # No score for multiple choice
+                    feedback=eval_result['explanation'],  # Use specific explanation for this answer
+                    correct_points=[],  # No points for multiple choice
+                    incorrect_points=[],  # No points for multiple choice
+                    knowledge_id=knowledge_id,
+                    evaluation_id=stored_eval['id'] if stored_eval else None,
+                    mastery=mastery_result['mastery'],
+                    mastery_explanation=mastery_result['explanation'],
+                    sample_answer=None,  # No sample answer for multiple choice
+                    is_correct=is_correct,
+                    multiple_choice_question_id=question['id']
+                )
+                
+                all_evaluations.append(eval_response)
+            
+            # Update knowledge item mastery
+            supabase_manager.update_mastery(
+                knowledge_id=knowledge_id,
+                evaluation_id=None,  # No single evaluation ID for batch
+                mastery=mastery_result['mastery'],
+                mastery_explanation=mastery_result['explanation']
+            )
+        
+        return MultipleChoiceBatchEvaluationResponse(
+            evaluations=all_evaluations,
+            total_evaluated=len(all_evaluations)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error evaluating multiple choice answers: {str(e)}"
         )
 
 @router.get("/evaluations/{knowledge_id}", response_model=EvaluationHistoryResponse)
@@ -389,7 +564,7 @@ async def get_evaluations_by_knowledge_id(
             evaluation = EvaluationResponse(
                 question_text=eval_data.get('question_text', ''),
                 answer=eval_data.get('answer_text', ''),
-                score=eval_data.get('score', 1),
+                score=eval_data.get('score'),  # May be None for multiple choice
                 feedback=eval_data.get('feedback', ''),
                 correct_points=eval_data.get('correct_points', []),
                 incorrect_points=eval_data.get('incorrect_points', []),
@@ -397,13 +572,18 @@ async def get_evaluations_by_knowledge_id(
                 knowledge_id=knowledge_id,
                 mastery=eval_data.get('mastery', 0.0),
                 mastery_explanation=eval_data.get('mastery_explanation', ''),
-                sample_answer=eval_data.get('sample_answer', None)
+                sample_answer=eval_data.get('sample_answer', None),
+                is_correct=eval_data.get('is_correct'),
+                multiple_choice_question_id=eval_data.get('multiple_choice_question_id')
             )
             evaluations.append(evaluation)
-            total_score += evaluation.score
+            # Only add score to total if it exists (free text answers)
+            if evaluation.score is not None:
+                total_score += evaluation.score
         
-        # Calculate average score
-        average_score = total_score / len(evaluations) if evaluations else 0
+        # Calculate average score only for free text answers
+        scored_evaluations = [e for e in evaluations if e.score is not None]
+        average_score = total_score / len(scored_evaluations) if scored_evaluations else 0
         
         return EvaluationHistoryResponse(
             evaluations=evaluations,

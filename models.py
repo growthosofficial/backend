@@ -22,8 +22,8 @@ class Question(BaseModel):
     question_type: QuestionType = Field(default=QuestionType.FREE_TEXT, description="Type of question (multiple choice or free text)")
 
 class MultipleChoiceQuestion(BaseModel):
-    """Model for multiple choice questions"""
-    id: int = Field(..., description="Database ID of the question")
+    """Internal model for multiple choice questions with all fields"""
+    question_id: int = Field(..., description="Database ID of the question")
     question_text: str = Field(..., description="The question text")
     options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
     correct_answer_index: int = Field(..., ge=0, le=3, description="Index of correct answer (0-3)")
@@ -36,6 +36,14 @@ class MultipleChoiceQuestion(BaseModel):
             raise ValueError('Must have exactly 4 options')
         return v
 
+class MultipleChoiceQuestionResponse(BaseModel):
+    """Public response model for multiple choice questions (without answers)"""
+    question_id: int = Field(..., description="Database ID of the question")
+    question_text: str = Field(..., description="The question text")
+    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
+    selected_answer_index: int | None = Field(None, description="Index of selected option (0-3)")
+
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""
     questions: List[Question] = Field(..., description="List of generated questions")
@@ -43,7 +51,7 @@ class GenerateQuestionsResponse(BaseModel):
 
 class GenerateMultipleChoiceResponse(BaseModel):
     """Response model for multiple choice question generation"""
-    questions: List[MultipleChoiceQuestion] = Field(..., description="List of generated multiple choice questions")
+    questions: List[MultipleChoiceQuestionResponse] = Field(..., description="List of generated multiple choice questions")
     total_questions: int = Field(..., description="Total number of questions generated")
 
 class AnswerRequest(BaseModel):
@@ -65,7 +73,7 @@ class EvaluationResponse(BaseModel):
     """Response model for answer evaluation"""
     question_text: str = Field(..., description="The original question that was asked")
     answer: str = Field(..., description="Your submitted answer")
-    score: int = Field(..., ge=1, le=5, description="Score from 1-5")
+    score: int | None = Field(None, ge=1, le=5, description="Score from 1-5 (only for free text answers)")
     feedback: str = Field(..., description="Overall feedback on the answer")
     correct_points: List[str] = Field(default_factory=list, description="Points that were correct")
     incorrect_points: List[str] = Field(default_factory=list, description="Points that were incorrect or missing")
@@ -74,6 +82,9 @@ class EvaluationResponse(BaseModel):
     mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
     mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
     sample_answer: str | None = Field(None, description="An example of a good answer to this question")
+    # Multiple choice specific fields
+    is_correct: bool | None = Field(None, description="For multiple choice: whether the answer was correct")
+    multiple_choice_question_id: int | None = Field(None, description="For multiple choice: ID of the question")
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -234,3 +245,9 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(None, description="Detailed error information")
     timestamp: datetime = Field(default_factory=datetime.now, description="Error timestamp")
+
+
+class MultipleChoiceBatchEvaluationResponse(BaseModel):
+    """Response model for batch multiple choice evaluation"""
+    evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations")
+    total_evaluated: int = Field(..., description="Total number of answers evaluated")

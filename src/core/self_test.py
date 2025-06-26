@@ -5,6 +5,8 @@ import json
 import time
 import openai
 from typing import Dict, Optional, List
+import os
+from datetime import datetime
 
 from models import QuestionType
 from config.settings import settings
@@ -15,6 +17,15 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
         raise ValueError("AZURE_OPENAI_API_KEY not found")
     if not settings.AZURE_OPENAI_ENDPOINT:
         raise ValueError("AZURE_OPENAI_ENDPOINT not found")
+        
+    # Save prompt to file with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}_{prompt_name.replace(' ', '_')}.txt"
+    filepath = os.path.join("tmp/prompts", filename)
+    
+    # Save prompt to file
+    with open(filepath, 'w') as f:
+        f.write(prompt)
         
     # Configure Azure OpenAI client
     client = openai.AzureOpenAI(
@@ -37,6 +48,41 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
     
     return response.choices[0].message.content or ""
 
+def format_evaluation_history(evaluations: List[Dict]) -> str:
+    """
+    Format evaluation history for mastery calculation in a structured way
+    
+    Args:
+        evaluations: List of evaluation records
+        
+    Returns:
+        Formatted evaluation history string with clear structure and separation
+    """
+    if not evaluations:
+        return ""
+
+    eval_history = ""
+    for i, eval in enumerate(evaluations, 1):
+        eval_type = eval.get('question_type')
+        if eval_type == QuestionType.MULTIPLE_CHOICE:
+            eval_history += f"""
+Evaluation #{i} - Multiple Choice
+-------------------------------
+Question: {eval.get('question_text', '')}
+Your Answer: {eval.get('answer_text', '')}
+Correct Answer: {eval.get('correct_answer', '')}
+-------------------------------"""
+        else:
+            eval_history += f"""
+Evaluation #{i} - Free Text
+-------------------------------
+Question: {eval.get('question_text', '')}
+Your Answer: {eval.get('answer_text', '')}
+Feedback: {eval.get('feedback', '')}
+-------------------------------"""
+
+    return eval_history
+
 def generate_free_text_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
     """
     Generate a thought-provoking free text question for a given knowledge item
@@ -53,17 +99,8 @@ def generate_free_text_question(category: str, content: str, knowledge_id: Optio
     if knowledge_id:
         try:
             from database.supabase_manager import supabase_manager
-            patterns = supabase_manager.get_evaluations(knowledge_id)
-            if patterns and patterns["evaluations"]:
-                # Format previous evaluations for the prompt
-                eval_examples = patterns["evaluations"]  # Already limited to 3 most recent
-                evaluation_context = "Previous question-answer examples:\n"
-                for eval in eval_examples:
-                    evaluation_context += f"""
-Question: {eval['question_text']}
-Answer: {eval['answer_text']}
-Feedback: {eval['feedback']}
-"""
+            evaluations = supabase_manager.get_evaluations(knowledge_id)
+            evaluation_context = format_evaluation_history(evaluations)
         except Exception as e:
             print(f"Error getting evaluation patterns: {e}")
             # Continue without evaluation data if there's an error
@@ -76,6 +113,7 @@ The question should test deep understanding and critical thinking, not just memo
 Knowledge Category: {category}
 Content: {content}
 
+Previous Answers (newest to oldest):
 {evaluation_context}
 
 QUESTION GENERATION PRIORITIES:
@@ -134,9 +172,9 @@ Format your response as a JSON object with this structure:
         print(f"Error generating question for category {category}: {e}")
         return None
 
-def evaluate_answer(question_text: str, answer: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
+def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
     """
-    Evaluate a user's answer to a question using Azure OpenAI
+    Evaluate a user's free text answer to a question using Azure OpenAI
     
     Args:
         question_text: The original question text
@@ -156,6 +194,11 @@ Question: {question}
 Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
+CRITICAL - Initial Checks:
+1. If the answer is irrelevant, off-topic, or just a greeting/single word, score it 1 immediately
+2. If the answer shows no attempt to address the question's specific points, score it 1
+3. Only proceed with detailed evaluation if the answer makes a genuine attempt to address the question
+
 CRITICAL - Answer Completeness Check:
 1. First identify ALL parts of what was asked in the question
 2. Check if EACH part was properly addressed in the answer
@@ -163,7 +206,11 @@ CRITICAL - Answer Completeness Check:
 4. Missing ANY major part of the question should result in score ≤ 3
 
 Score the answer on a scale of 1-5 using these strict guidelines:
-1 = Not understood / Incorrect / Completely off-topic
+1 = Any of these conditions:
+   - Not understood / Incorrect / Completely off-topic
+   - Single word or greeting only
+   - No attempt to address the question
+   - Irrelevant response
 2 = Basic understanding but significant parts missing or incorrect
 3 = Moderate understanding, some key parts missing or superficial
 4 = Good understanding with minor gaps or imperfections
@@ -173,19 +220,7 @@ Score the answer on a scale of 1-5 using these strict guidelines:
    - ALL requested examples/applications provided
    - Shows deep understanding beyond basic facts
 
-Scoring Guidelines:
-- Missing any major asked-for component: Maximum score 3
-- Only basic definitions without asked-for explanations: Maximum score 2
-- No examples when examples were requested: Maximum score 3
-- Incorrect or missing real-world applications: Reduce score by at least 1
-- Superficial answers to multi-part questions: Maximum score 3
-
-Also provide a sample answer that would score 5/5. The sample answer should:
-1. Directly address all parts of the question
-2. Show clear understanding of the concepts
-3. Use specific examples or applications where relevant
-4. Connect ideas logically
-5. Stay focused and avoid unnecessary details
+Also provide a sample answer that would score 5/5.
 
 Format your response as a JSON object with this structure:
 {{
@@ -207,7 +242,7 @@ Format your response as a JSON object with this structure:
         )
         
         # Get response from Azure OpenAI
-        response = call_azure_openai(prompt, "Answer Evaluation")
+        response = call_azure_openai(prompt, "Free Text Answer Evaluation")
         
         # Parse response
         result = json.loads(response)
@@ -248,7 +283,101 @@ Format your response as a JSON object with this structure:
             "sample_answer": ""
         }
 
-def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
+def evaluate_multiple_choice_answers(answers_text: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
+    """
+    Evaluate multiple choice answers for a knowledge item using Azure OpenAI
+    
+    Args:
+        answers_text: Formatted text containing questions, selected answers, and correct answers
+        knowledge_content: The knowledge content the questions were based on
+        main_category: The main knowledge category
+        sub_category: The sub category
+        
+    Returns:
+        Dictionary with evaluation results including feedback and array of evaluations
+    """
+    prompt_template = '''You are an evaluator assessing multiple choice answers. Respond with valid JSON only.
+
+Main Category: {main_category}
+Sub Category: {sub_category}
+Knowledge Content: {knowledge}
+
+Multiple Choice Answers:
+{answers}
+
+EVALUATION GUIDELINES:
+1. Analyze each answer individually and provide specific feedback
+2. Identify why the student chose each answer (correct or incorrect)
+3. For incorrect answers, explain the misconception that led to that choice
+4. For correct answers, reinforce the understanding demonstrated
+5. Connect the answers to the core concepts in the knowledge content
+
+Format your response as a JSON object with this structure:
+{{
+    "feedback": "Overall analysis of understanding based on answer patterns. Use you to refer to the user.",
+    "evaluations": [
+        {{
+            "question": "The original question text",
+            "selected_answer": "What the user selected",
+            "is_correct": true/false,
+            "explanation": "Why this answer was chosen and what it reveals about understanding"
+        }},
+        // ... more evaluations ...
+    ]
+}}
+
+Example feedback structure:
+"You demonstrate good understanding of concept X in questions 1 and 3, but seem to have some confusion about Y in question 2. Focus on reviewing the relationship between..."
+
+Example evaluation:
+{{
+    "question": "What is the primary role of mitochondria?",
+    "selected_answer": "Energy production",
+    "is_correct": true,
+    "explanation": "You correctly identified the key function of mitochondria. This shows you understand cellular energy processes."
+}}'''
+
+    try:
+        # Format prompt with actual content
+        prompt = prompt_template.format(
+            answers=answers_text,
+            knowledge=knowledge_content,
+            main_category=main_category,
+            sub_category=sub_category
+        )
+        
+        # Get response from Azure OpenAI
+        response = call_azure_openai(prompt, "Multiple Choice Evaluation")
+        
+        # Parse response
+        result = json.loads(response)
+        
+        # Validate evaluation response
+        required_fields = ["feedback", "evaluations"]
+        for field in required_fields:
+            if field not in result:
+                print(f"Error: Response missing {field} field")
+                return {
+                    "feedback": "Error in evaluation response",
+                    "evaluations": []
+                }
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing response: {e}")
+        return {
+            "feedback": f"Error processing response: {str(e)}",
+            "evaluations": []
+        }
+    except Exception as e:
+        print(f"Error in evaluation: {e}")
+        return {
+            "feedback": f"Error: {str(e)}",
+            "evaluations": []
+        }
+
+def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
     """
     Calculate mastery level using LLM by analyzing evaluation history
     
@@ -296,23 +425,10 @@ Example responses:
 
     try:
         # Format evaluation history
-        eval_history = ""
-        for i, eval in enumerate(previous_evaluations, 1):
-            eval_type = eval.get('question_type', QuestionType.FREE_TEXT)
-            if eval_type == QuestionType.MULTIPLE_CHOICE:
-                eval_history += f"""
-Q{i} (Multiple Choice): {eval.get('question_text', '')}
-Selected: {eval.get('selected_answer', '')} | Correct: {eval.get('correct_answer', '')}"""
-            else:
-                eval_history += f"""
-Q{i} (Free Text): {eval.get('question_text', '')}
-A{i}: {eval.get('answer_text', '')}"""
+        eval_history = format_evaluation_history(previous_evaluations)
         
         # Format the current answer based on type
-        if new_evaluation.get('question_type') == QuestionType.MULTIPLE_CHOICE:
-            current_answer = f"Selected: {new_evaluation.get('selected_answer', '')} | Correct: {new_evaluation.get('correct_answer', '')}"
-        else:
-            current_answer = new_evaluation.get('answer_text', '')
+        current_answer = new_evaluation.get('answer_text', '')
         
         # Format prompt with actual content
         prompt = prompt_template.format(
@@ -325,12 +441,12 @@ A{i}: {eval.get('answer_text', '')}"""
         )
         
         # Get response from Azure OpenAI
-        response = call_azure_openai(prompt, "Mastery Calculation")
+        response = call_azure_openai(prompt, "Free Text Mastery Calculation")
         if not response:
             print("Empty response from Azure OpenAI")
             return {
-                "mastery": 0.0,
-                "explanation": "Error getting LLM analysis, using score-based fallback"
+                "mastery": current_mastery,  # Keep current mastery on error
+                "explanation": "Error getting LLM analysis, maintaining current mastery level"
             }
         
         # Parse response
@@ -367,75 +483,137 @@ A{i}: {eval.get('answer_text', '')}"""
             print(f"Error processing response: {e}")
             print(f"Raw response: {response}")
             return {
-                "mastery": 0.0,
-                "explanation": "Error in LLM analysis, using score-based fallback"
+                "mastery": current_mastery,  # Keep current mastery on error
+                "explanation": "Error in LLM analysis, maintaining current mastery level"
             }
         
     except Exception as e:
         print(f"Error in mastery calculation: {e}")
         return {
-            "mastery": 0.0,
-            "explanation": "Error in LLM analysis, using score-based fallback"
+            "mastery": current_mastery,  # Keep current mastery on error
+            "explanation": "Error in LLM analysis, maintaining current mastery level"
         }
 
-def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_manager) -> Dict:
+def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
     """
-    Calculate mastery level for a knowledge item based on current and past evaluations
+    Calculate mastery level using LLM by analyzing multiple choice evaluation history
     
     Args:
-        knowledge_id: ID of the knowledge item
-        current_evaluation: Current evaluation data
-        supabase_manager: Instance of SupabaseManager for database access
+        knowledge_content: The full content of the knowledge item
+        new_evaluation: The current evaluation being analyzed
+        previous_evaluations: List of previous evaluation records
+        current_mastery: Current mastery level of the knowledge item
         
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
+    prompt_template = '''Assess understanding and provide feedback for multiple choice answers. Respond with valid JSON only.
+
+Current Mastery: {current_mastery}
+
+Guidelines:
+- Multiple choice answers show recognition and basic understanding
+- Consistent correct answers indicate good grasp of fundamentals
+- Pattern of incorrect answers may reveal specific misconceptions
+- Consider answer patterns and explanations when adjusting mastery
+- Recent performance should have more weight than older answers
+- Quick, correct answers suggest stronger mastery than hesitant ones
+- Look for improvement trends over time
+
+Knowledge Content:
+{knowledge_content}
+
+Current Evaluation:
+{current_evaluation}
+
+Previous Answers (newest to oldest):
+{evaluation_history}
+
+Response Format:
+{{
+    "mastery": <float 0-1>,
+    "explanation": "2-3 sentences describing: 1) Pattern of multiple choice performance 2) Areas of demonstrated understanding 3) Specific concepts needing review"
+}}
+
+Example responses:
+"Your multiple choice performance shows strong recognition of key concepts with 80% accuracy. You consistently identify correct database relationships but sometimes confuse normalization forms. Focus on reviewing the specific criteria for 2NF vs 3NF."
+
+"Recent answers demonstrate improved understanding of quantum mechanics principles. You correctly identify wave-particle duality examples but still have difficulty with uncertainty principle applications. Continue practicing problems involving position-momentum uncertainty."
+
+"Multiple choice results indicate basic familiarity with machine learning concepts. While you can recognize supervised vs unsupervised approaches, you often mix up specific algorithms like k-means and kNN. Review the key characteristics that distinguish clustering from classification algorithms."'''
+
     try:
-        # Get knowledge item content and current mastery
-        knowledge_result = supabase_manager.supabase.table('knowledge_items')\
-            .select('content,mastery')\
-            .eq('id', knowledge_id)\
-            .single()\
-            .execute()
+        # Format evaluation history
+        eval_history = format_evaluation_history(previous_evaluations)
         
-        if not knowledge_result.data:
-            print(f"Knowledge item {knowledge_id} not found")
-            score_based_mastery = min(1.0, current_evaluation.get('score', 0) / 5.0)
-            return {
-                "mastery": score_based_mastery,
-                "explanation": "Using current evaluation score as mastery (knowledge item not found)"
-            }
+        # Format the current evaluation
+        current_eval_text = f"""
+Questions and Answers:
+{new_evaluation.get('answer_text', '')}
+
+Overall Feedback:
+{new_evaluation.get('feedback', '')}"""
         
-        knowledge_content = knowledge_result.data.get('content', '')
-        current_mastery = knowledge_result.data.get('mastery', 0.0)
-        
-        # Get recent evaluations ordered by date
-        eval_result = supabase_manager.supabase.table('evaluations')\
-            .select('*')\
-            .eq('knowledge_id', knowledge_id)\
-            .order('created_at', desc=True)\
-            .limit(10)\
-            .execute()
-        
-        # Get previous evaluations
-        previous_evaluations = eval_result.data if eval_result.data else []
-        
-        mastery_result = calculate_mastery_with_llm(
+        # Format prompt with actual content
+        prompt = prompt_template.format(
             knowledge_content=knowledge_content,
-            new_evaluation=current_evaluation,
-            previous_evaluations=previous_evaluations,
-            current_mastery=current_mastery
+            current_mastery=current_mastery,
+            current_evaluation=current_eval_text,
+            evaluation_history=eval_history
         )
         
-        return mastery_result
+        # Get response from Azure OpenAI
+        response = call_azure_openai(prompt, "Multiple Choice Mastery Calculation")
+        if not response:
+            print("Empty response from Azure OpenAI")
+            return {
+                "mastery": current_mastery,  # Keep current mastery on error
+                "explanation": "Error getting LLM analysis, maintaining current mastery level"
+            }
+        
+        # Parse response
+        try:
+            # Clean the response string
+            response = response.strip()
+            response = ''.join(char for char in response if ord(char) >= 32 or char in '\n\r\t')
+            if response.startswith('"') and response.endswith('"'):
+                response = response[1:-1]
+            response = response.replace('\\n', '')
+            
+            # Parse JSON
+            try:
+                result = json.loads(response)
+            except json.JSONDecodeError:
+                start = response.find('{')
+                end = response.rfind('}')
+                if start != -1 and end != -1:
+                    json_str = response[start:end + 1].replace('\\"', '"')
+                    result = json.loads(json_str)
+                else:
+                    raise ValueError("No valid JSON found")
+            
+            # Validate and adjust mastery
+            if "mastery" not in result or "explanation" not in result:
+                raise ValueError("Missing required fields")
+            
+            result["mastery"] = float(result["mastery"])
+            result["mastery"] = max(0, min(1, result["mastery"]))
+
+            return result
+            
+        except Exception as e:
+            print(f"Error processing response: {e}")
+            print(f"Raw response: {response}")
+            return {
+                "mastery": current_mastery,  # Keep current mastery on error
+                "explanation": "Error in LLM analysis, maintaining current mastery level"
+            }
         
     except Exception as e:
-        print(f"Error calculating mastery for knowledge item {knowledge_id}: {e}")
-        # Fallback to using the current evaluation score
-        score_based_mastery = min(1.0, current_evaluation.get('score', 0) / 5.0)
+        print(f"Error in multiple choice mastery calculation: {e}")
         return {
-            "mastery": score_based_mastery,
-            "explanation": f"Using current evaluation score as mastery due to error: {str(e)}"
+            "mastery": current_mastery,  # Keep current mastery on error
+            "explanation": "Error in LLM analysis, maintaining current mastery level"
         }
 
 def generate_multiple_choice_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
@@ -448,22 +626,14 @@ def generate_multiple_choice_question(category: str, content: str, knowledge_id:
         knowledge_id: Optional ID to analyze past evaluation patterns
         
     Returns:
-        Dictionary with question_text, options, and correct_answer if successful, None if failed
+        Dictionary with question_text, options, correct_answer_index, explanation, and question_id if successful, None if failed
     """
     evaluation_context = ""
     if knowledge_id:
         try:
             from database.supabase_manager import supabase_manager
-            patterns = supabase_manager.get_evaluations(knowledge_id)
-            if patterns and patterns["evaluations"]:
-                eval_examples = patterns["evaluations"]
-                evaluation_context = "Previous question-answer examples:\n"
-                for eval in eval_examples:
-                    evaluation_context += f"""
-Question: {eval['question_text']}
-Answer: {eval['answer_text']}
-Feedback: {eval['feedback']}
-"""
+            evaluations = supabase_manager.get_evaluations(knowledge_id)
+            evaluation_context = format_evaluation_history(evaluations)
         except Exception as e:
             print(f"Error getting evaluation patterns: {e}")
             pass
@@ -474,6 +644,7 @@ The question should test understanding and application, not just memorization.
 Knowledge Category: {category}
 Content: {content}
 
+Previous Answers (newest to oldest):
 {evaluation_context}
 
 QUESTION GENERATION PRIORITIES:
@@ -541,6 +712,25 @@ Format your response as a JSON object with this structure:
            question_data["correct_answer_index"] > 3:
             print(f"Error: Invalid correct_answer_index: {question_data['correct_answer_index']}")
             return None
+            
+        # Store question in database if knowledge_id is provided
+        if knowledge_id:
+            try:
+                from database.supabase_manager import supabase_manager
+                db_question = supabase_manager.create_multiple_choice_question({
+                    "question_text": question_data["question_text"],
+                    "options": question_data["options"],
+                    "correct_answer_index": question_data["correct_answer_index"],
+                    "explanation": question_data["explanation"],
+                    "knowledge_id": knowledge_id
+                })
+                if db_question:
+                    # Add database ID to response
+                    question_data["question_id"] = db_question["id"]
+            except Exception as e:
+                print(f"Error storing multiple choice question: {e}")
+                # Continue without storing if there's an error
+                pass
             
         return question_data
         

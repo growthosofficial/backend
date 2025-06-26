@@ -134,8 +134,8 @@ class SupabaseManager:
             Dictionary with database statistics
         """
         # Get total count
-        count_result = self.supabase.table('knowledge_items').select('id', count='exact').execute()
-        total_items = count_result.count
+        count_result = self.supabase.table('knowledge_items').select('id').execute()
+        total_items = len(count_result.data)
         
         # Get all items for analysis
         all_items = self.load_all_knowledge()
@@ -388,7 +388,6 @@ class SupabaseManager:
             Created evaluation record or None if failed
         """
         try:
-            # Create evaluation record
             result = self.supabase.table('evaluations').insert(evaluation_data).execute()
             return result.data[0] if result.data else None
             
@@ -396,9 +395,9 @@ class SupabaseManager:
             print(f"Error in create_evaluation: {e}")
             return None
 
-    def get_evaluations(self, knowledge_id: int) -> Dict:
+    def get_evaluations(self, knowledge_id: int) -> List[Dict]:
         """
-        Get the 3 most recent evaluations for a specific knowledge item
+        Get  most recent evaluations for a specific knowledge item
         
         Args:
             knowledge_id: ID of the knowledge item
@@ -407,21 +406,17 @@ class SupabaseManager:
             Dictionary containing list of most recent evaluations with their questions, answers, feedback and points
         """
         try:
-            # Get 3 most recent evaluations for this knowledge item
             result = self.supabase.table('evaluations')\
-                .select('question_text,answer_text,feedback,correct_points,incorrect_points')\
+                .select('*')\
                 .eq('knowledge_id', knowledge_id)\
                 .order('created_at', desc=True)\
-                .limit(3)\
+                .limit(10)\
                 .execute()
-            
-            return {
-                "evaluations": result.data if result.data else []
-            }
-            
+            return result.data if result.data else []
+
         except Exception as e:
             print(f"Error getting evaluations: {e}")
-            return {"evaluations": []}
+            return []
 
     def create_multiple_choice_questions(self, questions: List[Dict]) -> List[Dict]:
         """
