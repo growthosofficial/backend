@@ -267,75 +267,35 @@ def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, pre
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''You are a helpful assistant that analyzes student mastery levels based on their evaluation history.
-Always respond with valid JSON in the specified format.
+    prompt_template = '''Analyze your understanding based on your answer. Respond with valid JSON only.
+
+Current Mastery: {current_mastery}, please use this as reference when computing your new mastery level.
 
 Knowledge Content:
 {knowledge_content}
 
-Current Mastery Level: {current_mastery}
-
-Previous Feedback: {new_eval_feedback}
-
-NEW EVALUATION:
 Question: {new_eval_question}
-Answer: {new_eval_answer}
-Feedback Points:
-Correct:
-{new_eval_correct}
-Needs Improvement:
-{new_eval_incorrect}
+Your Answer: {new_eval_answer}
 
-Previous Evaluation History (from most recent to oldest):
+Your Previous Answers:
 {evaluation_history}
 
-CRITICAL - Answer Quality Analysis:
-1. For each answer:
-   - First verify if the answer is correct according to the knowledge content
-   - Consider the feedback and points but make your own assessment
-   - Were ALL parts of the question addressed?
-   - Were explanations thorough or superficial?
-   - Were requested examples/applications provided?
-   - Was understanding demonstrated or just memorization?
-2. Make your own assessment of the answer quality - don't just rely on the provided feedback
-3. If an answer contains incorrect information, that concept's mastery should reflect the severity of the error
+Assessment Criteria:
+1. Answer Quality:
+   - Accuracy vs knowledge content
+   - Depth of understanding
+   - Original examples/applications
+   - Clear explanation
 
-CRITICAL - Concept Coverage Analysis:
-1. First identify ALL key concepts in the knowledge content
-2. For each concept, check:
-   - Has it been tested in any question?
-   - Was the answer complete and correct for that concept?
-   - Was understanding demonstrated or just memorization?
-3. Calculate concept coverage continuously:
-   - Untested concepts count as 0
-   - For tested concepts, assign a mastery level between 0-1 based on:
-     * Correctness of the answer
-     * Completeness of explanation
-     * Depth of understanding shown
-     * Application/examples if requested
+2. Concept Coverage:
+   - Key concepts identified
+   - Completeness of explanation
+   - Understanding vs memorization
 
-CRITICAL - Mastery Level Adjustment:
-1. Compare new mastery assessment with current mastery level ({current_mastery})
-2. If new evaluation shows improvement:
-   - Increase mastery proportionally to the improvement shown
-   - Major improvements can increase mastery significantly
-3. If new evaluation shows decline:
-   - Decrease mastery to reflect the current level of understanding
-   - Recent incorrect answers should impact mastery more than old correct ones
-4. If mixed performance:
-   - Weight the new evaluation more heavily than previous ones
-   - Consider the complexity of concepts being tested
-
-Format your response as a JSON object with this structure:
+Response Format:
 {{
-    "mastery": <float between 0 and 1>,
-    "explanation": "Brief explanation of why this mastery level was assigned, including how it changed from previous mastery of {current_mastery}"
-}}
-
-Example response:
-{{
-    "mastery": 0.35,
-    "explanation": "Previous mastery was {current_mastery}. New evaluation shows only basic definition mastery and contains inaccuracies. Of 4 key concepts, only formula was demonstrated. Missing explanations and examples that were explicitly requested."
+    "mastery": <float 0-1>,
+    "explanation": "Detailed breakdown of what concepts you have mastered and what concepts you need to improve"
 }}'''
 
     try:
@@ -343,15 +303,8 @@ Example response:
         eval_history = ""
         for i, eval in enumerate(previous_evaluations, 1):
             eval_history += f"""
-Evaluation {i}:
-Question: {eval.get('question_text', '')}
-Answer: {eval.get('answer_text', '')}
-Feedback Points:
-Correct:
-{chr(10).join(f"- {point}" for point in eval.get('correct_points', []))}
-Needs Improvement:
-{chr(10).join(f"- {point}" for point in eval.get('incorrect_points', []))}
-Previous Feedback: {eval.get('feedback', '')}
+Q{i}: {eval.get('question_text', '')}
+A{i}: {eval.get('answer_text', '')}
 """
         
         # Format prompt with actual content
@@ -360,9 +313,6 @@ Previous Feedback: {eval.get('feedback', '')}
             current_mastery=current_mastery,
             new_eval_question=new_evaluation.get('question_text', ''),
             new_eval_answer=new_evaluation.get('answer_text', ''),
-            new_eval_correct=chr(10).join(f"- {point}" for point in new_evaluation.get('correct_points', [])),
-            new_eval_incorrect=chr(10).join(f"- {point}" for point in new_evaluation.get('incorrect_points', [])),
-            new_eval_feedback=new_evaluation.get('feedback', ''),
             evaluation_history=eval_history
         )
         
@@ -371,7 +321,7 @@ Previous Feedback: {eval.get('feedback', '')}
         if not response:
             print("Empty response from Azure OpenAI")
             return {
-                "mastery": 0.8 if new_evaluation.get('score', 0) == 5 else 0.4,
+                "mastery": 0.0,
                 "explanation": "Error getting LLM analysis, using score-based fallback"
             }
         
@@ -379,66 +329,44 @@ Previous Feedback: {eval.get('feedback', '')}
         try:
             # Clean the response string
             response = response.strip()
-            
-            # Remove any potential BOM or hidden characters
             response = ''.join(char for char in response if ord(char) >= 32 or char in '\n\r\t')
-            
-            # Remove any leading/trailing quotes if present
             if response.startswith('"') and response.endswith('"'):
                 response = response[1:-1]
-            
-            # Remove any escaped newlines
             response = response.replace('\\n', '')
             
-            # Try to find JSON in the response
+            # Parse JSON
             try:
-                # First try direct parsing
                 result = json.loads(response)
             except json.JSONDecodeError:
-                # If that fails, try to find JSON object markers
                 start = response.find('{')
                 end = response.rfind('}')
                 if start != -1 and end != -1:
-                    json_str = response[start:end + 1]
-                    # Replace any escaped quotes
-                    json_str = json_str.replace('\\"', '"')
+                    json_str = response[start:end + 1].replace('\\"', '"')
                     result = json.loads(json_str)
                 else:
-                    raise ValueError("No valid JSON object found in response")
+                    raise ValueError("No valid JSON found")
             
-            # Validate required fields
+            # Validate and adjust mastery
             if "mastery" not in result or "explanation" not in result:
-                print("Error: Response missing required fields")
-                print(f"Raw response: {response}")
-                raise ValueError("Missing required fields in response")
+                raise ValueError("Missing required fields")
             
-            # Ensure mastery is float 0-1
-            try:
-                result["mastery"] = float(result["mastery"])
-                result["mastery"] = max(0, min(1, result["mastery"]))
-                result["mastery"] = round(result["mastery"], 2)
-            except (TypeError, ValueError):
-                print(f"Error converting mastery to float: {result['mastery']}")
-                raise ValueError("Invalid mastery value")
-            
+            result["mastery"] = float(result["mastery"])
+            result["mastery"] = max(0, min(1, result["mastery"]))
+
             return result
             
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Error parsing mastery calculation response: {e}")
+        except Exception as e:
+            print(f"Error processing response: {e}")
             print(f"Raw response: {response}")
-            # Fallback: Use a score-based calculation
-            latest_score = new_evaluation.get('score', 0)
             return {
-                "mastery": min(1.0, latest_score / 5.0),  # Convert 5-point score to 0-1 scale
+                "mastery": 0.0,
                 "explanation": "Error in LLM analysis, using score-based fallback"
             }
         
     except Exception as e:
         print(f"Error in mastery calculation: {e}")
-        # Fallback: Use a score-based calculation
-        latest_score = new_evaluation.get('score', 0)
         return {
-            "mastery": min(1.0, latest_score / 5.0),
+            "mastery": 0.0,
             "explanation": "Error in LLM analysis, using score-based fallback"
         }
 

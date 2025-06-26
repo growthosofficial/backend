@@ -248,6 +248,7 @@ async def evaluate_answers(request: BatchAnswerRequest):
             # Update knowledge item mastery and explanation
             supabase_manager.update_mastery(
                 knowledge_id=knowledge_id,
+                evaluation_id=stored_eval['id'] if stored_eval else None,
                 mastery=mastery_result['mastery'],
                 mastery_explanation=mastery_result['explanation']
             )

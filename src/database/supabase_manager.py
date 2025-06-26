@@ -336,7 +336,7 @@ class SupabaseManager:
         
         return category_analysis
 
-    def update_mastery(self, knowledge_id: int, mastery: float, mastery_explanation: str = "") -> None:
+    def update_mastery(self, knowledge_id: int, evaluation_id: int | None, mastery: float, mastery_explanation: str = "") -> None:
         """
         Update the mastery level and explanation of a knowledge item
         
@@ -346,11 +346,9 @@ class SupabaseManager:
             mastery_explanation: Explanation of how the mastery was calculated
         """
         try:
-            # Ensure mastery is between 0 and 1
             mastery = max(0, min(1, mastery))
             mastery = round(mastery, 2)
             
-            # Update mastery and explanation
             self.supabase.table('knowledge_items')\
                 .update({
                     'mastery': mastery,
@@ -358,10 +356,19 @@ class SupabaseManager:
                 })\
                 .eq('id', knowledge_id)\
                 .execute()
+            
+            if evaluation_id:
+                self.supabase.table('evaluations')\
+                    .update({
+                        'mastery': mastery,
+                        'mastery_explanation': mastery_explanation
+                    })\
+                    .eq('id', evaluation_id)\
+                    .execute()
                 
         except Exception as e:
             print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
-
+    
     def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
         """
         Create a new evaluation record
