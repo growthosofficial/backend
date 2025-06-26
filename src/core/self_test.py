@@ -204,7 +204,9 @@ Format your response as a JSON object with this structure:
         prompt = prompt_template.format(
             question=question_text,
             answer=answer,
-            knowledge=knowledge_content
+            knowledge=knowledge_content,
+            main_category=main_category,
+            sub_category=sub_category
         )
         
         # Get response from Azure OpenAI
