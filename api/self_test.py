@@ -1,28 +1,14 @@
 """
 Self-test generation and assessment logic for the Second Brain Knowledge Management System.
 """
-import sys
-from pathlib import Path
 from enum import Enum
-from typing import List, Dict
+from typing import List
 from pydantic import BaseModel, Field
 import random
-import json
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Path
 
-# Add parent directory to Python path for imports
-current_dir = Path(__file__).parent
-src_dir = current_dir.parent
-sys.path.insert(0, str(src_dir))
-
-try:
-    from database.supabase_manager import supabase_manager
-    from core.self_test import generate_question, evaluate_answer, get_knowledge_mastery
-except ImportError as e:
-    print(f"❌ Import error in self_test.py: {e}")
-    print(f"Current directory: {current_dir}")
-    print(f"Python path: {sys.path}")
-    raise
+from database.supabase_manager import supabase_manager
+from core.self_test import generate_question, evaluate_answer, get_knowledge_mastery
 
 # Create router
 router = APIRouter(
@@ -67,6 +53,7 @@ class EvaluationResponse(BaseModel):
     knowledge_id: int = Field(..., description="ID of the knowledge item")
     mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
     mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
+    sample_answer: str | None = Field(None, description="An example of a good answer to this question")
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -76,6 +63,15 @@ class BatchEvaluationResponse(BaseModel):
     """Response model for batch answer evaluation"""
     evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
     total_evaluated: int = Field(..., description="Total number of answers evaluated")
+
+class EvaluationHistoryResponse(BaseModel):
+    """Response model for evaluation history"""
+    evaluations: List[EvaluationResponse]
+    knowledge_id: int
+    total_evaluations: int
+    average_score: float
+    current_mastery: float
+    mastery_explanation: str
 
 @router.post("/generate", response_model=GenerateQuestionsResponse)
 async def generate_questions(
@@ -181,7 +177,7 @@ async def evaluate_answers(request: BatchAnswerRequest):
     2. Efficiently loads all required knowledge items at once
     3. Evaluates each answer using Azure OpenAI
     4. Stores evaluation results and updates mastery in the database
-    5. Returns detailed feedback, scores and mastery levels for all answers
+    5. Returns detailed feedback, scores, mastery levels, and sample answers
     """
     try:
         # Extract unique knowledge IDs
@@ -272,7 +268,8 @@ async def evaluate_answers(request: BatchAnswerRequest):
                 evaluation_id=stored_eval['id'] if stored_eval else None,
                 knowledge_id=knowledge_id,
                 mastery=mastery_result['mastery'],
-                mastery_explanation=mastery_result['explanation']
+                mastery_explanation=mastery_result['explanation'],
+                sample_answer=evaluation.get('sample_answer')
             )
             
             evaluations.append(evaluation_response)
@@ -286,4 +283,74 @@ async def evaluate_answers(request: BatchAnswerRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error evaluating answers: {str(e)}"
+        )
+
+@router.get("/evaluations/{knowledge_id}", response_model=EvaluationHistoryResponse)
+async def get_evaluations_by_knowledge_id(
+    knowledge_id: int = Path(gt=0, title="Knowledge ID", description="ID of the knowledge item to get evaluations for"),
+    limit: int = Query(default=10, ge=1, le=50, description="Maximum number of evaluations to return")
+):
+    """
+    Get evaluation history for a specific knowledge item.
+    
+    Args:
+        knowledge_id: ID of the knowledge item
+        limit: Maximum number of evaluations to return (1-50)
+        
+    Returns:
+        List of evaluations with scores, feedback, and mastery progression
+    """
+    try:
+        # Get knowledge item to verify it exists and get current mastery
+        knowledge_item = supabase_manager.get_knowledge_by_id(knowledge_id)
+        if not knowledge_item:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Knowledge item {knowledge_id} not found"
+            )
+        
+        # Get evaluations for this knowledge item
+        eval_result = supabase_manager.supabase.table('evaluations')\
+            .select('*')\
+            .eq('knowledge_id', knowledge_id)\
+            .order('created_at', desc=True)\
+            .limit(limit)\
+            .execute()
+            
+        evaluations = []
+        total_score = 0
+        
+        for eval_data in eval_result.data:
+            evaluation = EvaluationResponse(
+                question_text=eval_data.get('question_text', ''),
+                answer=eval_data.get('answer_text', ''),
+                score=eval_data.get('score', 1),
+                feedback=eval_data.get('feedback', ''),
+                correct_points=eval_data.get('correct_points', []),
+                incorrect_points=eval_data.get('incorrect_points', []),
+                evaluation_id=eval_data.get('id'),
+                knowledge_id=knowledge_id,
+                mastery=eval_data.get('mastery', 0.0),
+                mastery_explanation=eval_data.get('mastery_explanation', ''),
+                sample_answer=eval_data.get('sample_answer', None)
+            )
+            evaluations.append(evaluation)
+            total_score += evaluation.score
+        
+        # Calculate average score
+        average_score = total_score / len(evaluations) if evaluations else 0
+        
+        return EvaluationHistoryResponse(
+            evaluations=evaluations,
+            knowledge_id=knowledge_id,
+            total_evaluations=len(evaluations),
+            average_score=round(average_score, 2),
+            current_mastery=knowledge_item.get('mastery', 0.0),
+            mastery_explanation=knowledge_item.get('mastery_explanation', '')
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving evaluations: {str(e)}"
         )

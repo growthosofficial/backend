@@ -185,12 +185,20 @@ Scoring Guidelines:
 - Incorrect or missing real-world applications: Reduce score by at least 1
 - Superficial answers to multi-part questions: Maximum score 3
 
+Also provide a sample answer that would score 5/5. The sample answer should:
+1. Directly address all parts of the question
+2. Show clear understanding of the concepts
+3. Use specific examples or applications where relevant
+4. Connect ideas logically
+5. Stay focused and avoid unnecessary details
+
 Format your response as a JSON object with this structure:
 {{
     "score": <integer 1-5>,
     "feedback": "Detailed feedback explaining strengths, weaknesses, and specific suggestions for improvement...",
     "correct_points": ["Point 1 that was correct", "Point 2 that was correct", ...],
-    "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...]
+    "incorrect_points": ["Point 1 that was incorrect/missing", "Point 2 that was incorrect/missing", ...],
+    "sample_answer": "A well-structured example answer that would score 5/5..."
 }}
 
 Example response for incomplete answer:
@@ -202,7 +210,8 @@ Example response for incomplete answer:
         "No explanation of relationship between force, mass, and acceleration",
         "Missing requested real-world example",
         "No analysis of different scenarios as asked in question"
-    ]
+    ],
+    "sample_answer": "Newton's second law (F = ma) describes the fundamental relationship between force, mass, and acceleration. When a force acts on an object, it produces an acceleration that is directly proportional to the force and inversely proportional to the object's mass. For example, when pushing a shopping cart, the same force will produce a larger acceleration with an empty cart (less mass) compared to a full cart (more mass). This relationship explains why it's harder to push a heavy object than a light one, and why the same force results in different accelerations depending on the mass of the object."
 }}'''
 
     try:
@@ -230,7 +239,8 @@ Example response for incomplete answer:
                     "score": 1,
                     "feedback": "Error in evaluation response",
                     "correct_points": [],
-                    "incorrect_points": ["Error processing response"]
+                    "incorrect_points": ["Error processing response"],
+                    "sample_answer": ""
                 }
         
         # Ensure score is integer 1-5
@@ -243,7 +253,8 @@ Example response for incomplete answer:
             "score": 1,
             "feedback": f"Error processing response: {str(e)}",
             "correct_points": [],
-            "incorrect_points": ["Error processing response"]
+            "incorrect_points": ["Error processing response"],
+            "sample_answer": ""
         }
     except Exception as e:
         print(f"Error in evaluation: {e}")
@@ -251,7 +262,8 @@ Example response for incomplete answer:
             "score": 1,
             "feedback": f"Error: {str(e)}",
             "correct_points": [],
-            "incorrect_points": ["Error processing response"]
+            "incorrect_points": ["Error processing response"],
+            "sample_answer": ""
         }
 
 def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
@@ -269,7 +281,13 @@ def calculate_mastery_with_llm(knowledge_content: str, new_evaluation: Dict, pre
     """
     prompt_template = '''Analyze your understanding based on your answer. Respond with valid JSON only.
 
-Current Mastery: {current_mastery}, please use this as reference when computing your new mastery level.
+Current Mastery: {current_mastery}
+
+New Mastery Level Guidelines:
+- Good answers should gradually increase mastery (max 1.0)
+- Maintain current mastery for average answers.
+- Significantly decrease mastery only for very poor answers showing clear lack of understanding (e.g. "I don't know" or completely incorrect)
+- Current answer weights the most, and recent answers weigh more than older answers.
 
 Knowledge Content:
 {knowledge_content}
@@ -277,7 +295,7 @@ Knowledge Content:
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Your Previous Answers:
+Your Previous Answers (newest to oldest)
 {evaluation_history}
 
 Assessment Criteria:
@@ -406,7 +424,7 @@ def get_knowledge_mastery(knowledge_id: int, current_evaluation: Dict, supabase_
             .select('*')\
             .eq('knowledge_id', knowledge_id)\
             .order('created_at', desc=True)\
-            .limit(5)\
+            .limit(10)\
             .execute()
         
         # Get previous evaluations
