@@ -395,7 +395,6 @@ def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, pr
 Current Mastery: {current_mastery}
 
 Guidelines:
-- Free text answers show deeper understanding than multiple choice
 - Good explanations increase mastery more than correct recognition
 - Poor answers (especially "I don't know") decrease mastery
 - Consider answer quality and type when adjusting mastery
@@ -407,7 +406,7 @@ Question Type: {question_type}
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Previous Answers (newest to oldest):
+Previous Answers (newest to oldest, free text weighs more than multiple choice):
 {evaluation_history}
 
 Response Format:
@@ -526,7 +525,7 @@ Knowledge Content:
 Current Evaluation:
 {current_evaluation}
 
-Previous Answers (newest to oldest):
+Previous Answers (newest to oldest, free text weighs more than multiple choice):
 {evaluation_history}
 
 Response Format:

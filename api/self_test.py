@@ -156,15 +156,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
             knowledge_content = knowledge_result.data.get('content', '')
             current_mastery = knowledge_result.data.get('mastery', 0.0)
             
-            # Get recent evaluations ordered by date
-            eval_result = supabase_manager.supabase.table('evaluations')\
-                .select('*')\
-                .eq('knowledge_id', knowledge_id)\
-                .order('created_at', desc=True)\
-                .limit(20)\
-                .execute()
-            
-            previous_evaluations = eval_result.data if eval_result.data else []
+            previous_evaluations = supabase_manager.get_evaluations(knowledge_id)
             
             # Evaluate the answer
             evaluation = evaluate_free_text_answer(
@@ -416,15 +408,7 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
                     detail=f"Knowledge item {knowledge_id} not found"
                 )
             
-            # Get recent evaluations ordered by date
-            eval_result = supabase_manager.supabase.table('evaluations')\
-                .select('*')\
-                .eq('knowledge_id', knowledge_id)\
-                .order('created_at', desc=True)\
-                .limit(20)\
-                .execute()
-            
-            previous_evaluations = eval_result.data if eval_result.data else []
+            previous_evaluations = supabase_manager.get_evaluations(knowledge_id)
             
             # Format answers for evaluation
             answer_texts = []
