@@ -288,14 +288,14 @@ async def evaluate_answers(request: BatchAnswerRequest):
 @router.get("/evaluations/{knowledge_id}", response_model=EvaluationHistoryResponse)
 async def get_evaluations_by_knowledge_id(
     knowledge_id: int = Path(gt=0, title="Knowledge ID", description="ID of the knowledge item to get evaluations for"),
-    limit: int = Query(default=10, ge=1, le=50, description="Maximum number of evaluations to return")
+    limit: int = Query(default=50, ge=1, le=100, description="Maximum number of evaluations to return")
 ):
     """
     Get evaluation history for a specific knowledge item.
     
     Args:
         knowledge_id: ID of the knowledge item
-        limit: Maximum number of evaluations to return (1-50)
+        limit: Maximum number of evaluations to return (1-100)
         
     Returns:
         List of evaluations with scores, feedback, and mastery progression
@@ -313,7 +313,7 @@ async def get_evaluations_by_knowledge_id(
         eval_result = supabase_manager.supabase.table('evaluations')\
             .select('*')\
             .eq('knowledge_id', knowledge_id)\
-            .order('created_at', desc=True)\
+            .order('created_at', desc=False)\
             .limit(limit)\
             .execute()
             
