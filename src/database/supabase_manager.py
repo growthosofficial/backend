@@ -47,14 +47,22 @@ class SupabaseManager:
         result = self.supabase.table('knowledge_items').select('*').eq('main_category', main_category).execute()
         return result.data
     
-    def load_all_knowledge(self) -> List[Dict]:
+    def load_all_knowledge(self, main_category: str | None = None) -> List[Dict]:
         """
         Load all knowledge items from Supabase for similarity analysis
         
+        Args:
+            main_category: Optional main category to filter by
+            
         Returns:
             List of all knowledge items with main_category and sub_category
         """
-        result = self.supabase.table('knowledge_items').select('*').order('created_at', desc=True).execute()
+        query = self.supabase.table('knowledge_items').select('*').order('created_at', desc=True)
+        
+        if main_category:
+            query = query.eq('main_category', main_category)
+            
+        result = query.execute()
         
         print(f"📚 Loaded {len(result.data)} knowledge items from Supabase for analysis")
         return result.data

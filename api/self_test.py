@@ -79,7 +79,8 @@ class BatchEvaluationResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateQuestionsResponse)
 async def generate_questions(
-    num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate")
+    num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate"),
+    main_category: str | None = Query(default=None, description="Optional main category to filter questions by")
 ):
     """
     Generate questions from the knowledge base.
@@ -89,14 +90,21 @@ async def generate_questions(
     1. Retrieves random knowledge items from the database
     2. Uses Azure OpenAI to generate thought-provoking questions
     3. Returns questions with their knowledge_id for later evaluation
+    
+    Args:
+        num_questions: Number of questions to generate (1-20)
+        main_category: Optional main category to filter questions by
     """
     try:
-        # Get all knowledge items
-        knowledge_items = supabase_manager.load_all_knowledge()
+        # Get knowledge items, optionally filtered by main category
+        knowledge_items = supabase_manager.load_all_knowledge(main_category=main_category)
         if not knowledge_items:
+            error_msg = "No knowledge items found in database"
+            if main_category:
+                error_msg = f"No knowledge items found for category: {main_category}"
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No knowledge items found in database"
+                detail=error_msg
             )
         
         # Filter out items without valid numeric IDs
@@ -123,14 +131,14 @@ async def generate_questions(
         
         for item in selected_items:
             # Get categories and content
-            main_category = item.get('main_category', 'Unknown')
+            item_main_category = item.get('main_category', 'Unknown')
             sub_category = item.get('sub_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
             # Generate question using our dedicated function
             question_data = generate_question(
-                category=main_category,  # Pass main category for backwards compatibility
+                category=item_main_category,  # Pass main category for backwards compatibility
                 content=content,
                 knowledge_id=knowledge_id
             )
@@ -139,7 +147,7 @@ async def generate_questions(
                 # Create Question object
                 question = Question(
                     question_text=question_data['question_text'],
-                    main_category=main_category,
+                    main_category=item_main_category,
                     sub_category=sub_category,
                     knowledge_id=knowledge_id,
                     answer=""
