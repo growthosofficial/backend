@@ -7,6 +7,7 @@ import openai
 from typing import Dict, Optional, List
 import os
 from datetime import datetime
+import random
 
 from models import QuestionType
 from config.settings import settings
@@ -615,17 +616,18 @@ Overall Feedback:
             "explanation": "Error in LLM analysis, maintaining current mastery level"
         }
 
-def generate_multiple_choice_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
+def generate_multiple_choice_question(category: str, content: str, knowledge_id: Optional[int] = None, num_questions: int = 1) -> Optional[List[Dict]]:
     """
-    Generate a multiple choice question for a given knowledge item
+    Generate multiple choice questions for a given knowledge item
     
     Args:
         category: Knowledge category
         content: Knowledge content to generate question from
         knowledge_id: Optional ID to analyze past evaluation patterns
+        num_questions: Number of questions to generate (default: 1)
         
     Returns:
-        Dictionary with question_text, options, correct_answer_index, explanation, and question_id if successful, None if failed
+        List of dictionaries with question_text, options, correct_answer_index, explanation, and question_id if successful, None if failed
     """
     evaluation_context = ""
     if knowledge_id:
@@ -637,8 +639,8 @@ def generate_multiple_choice_question(category: str, content: str, knowledge_id:
             print(f"Error getting evaluation patterns: {e}")
             pass
 
-    prompt_template = '''Generate 1 multiple choice question based on this knowledge content.
-The question should test understanding and application, not just memorization.
+    prompt_template = '''Generate {num_questions} multiple choice questions based on this knowledge content.
+Each question should test understanding and application, not just memorization.
 
 Knowledge Category: {category}
 Content: {content}
@@ -647,15 +649,15 @@ Previous Answers (newest to oldest):
 {evaluation_context}
 
 QUESTION GENERATION PRIORITIES:
-1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create a question that specifically addresses these gaps
+1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create questions that specifically address these gaps
 2. SECOND PRIORITY: Look for important concepts that haven't been covered by previous questions
-3. Only if no incorrect points or uncovered content: Create a question that approaches previously covered concepts from a new angle
+3. Only if no incorrect points or uncovered content: Create questions that approach previously covered concepts from new angles
 
 Requirements:
-1. Question should test understanding and application of concepts
+1. Each question should test understanding and application of concepts
 2. Options should be plausible but clearly distinguishable
-3. Include exactly 4 options (indexed 0-3)
-4. One and only one option should be correct
+3. Include exactly 4 options (indexed 0-3) for each question
+4. One and only one option should be correct per question
 5. Distractors (wrong options) should be:
    - Plausible but clearly incorrect
    - Based on common misconceptions
@@ -666,18 +668,25 @@ Requirements:
    - Grammatically consistent with question
    - Clear and unambiguous
    - Independent of each other
+7. Questions should be diverse and cover different aspects of the content
+8. Avoid redundant or very similar questions
 
 Format your response as a JSON object with this structure:
 {{
-    "question_text": "Your thought-provoking multiple choice question here...",
-    "options": [
-        "First option text here",
-        "Second option text here",
-        "Third option text here",
-        "Fourth option text here"
-    ],
-    "correct_answer_index": <number 0-3>,
-    "explanation": "Detailed explanation of why the correct answer is correct and why each distractor is incorrect"
+    "questions": [
+        {{
+            "question_text": "Your thought-provoking multiple choice question here...",
+            "options": [
+                "First option text here",
+                "Second option text here",
+                "Third option text here",
+                "Fourth option text here"
+            ],
+            "correct_answer_index": <number 0-3>,
+            "explanation": "Detailed explanation of why the correct answer is correct and why each distractor is incorrect"
+        }},
+        // ... more questions ...
+    ]
 }}'''
 
     try:
@@ -685,57 +694,78 @@ Format your response as a JSON object with this structure:
         prompt = prompt_template.format(
             category=category,
             content=content,
-            evaluation_context=evaluation_context
+            evaluation_context=evaluation_context,
+            num_questions=num_questions
         )
         
         # Get response from Azure OpenAI
         response = call_azure_openai(prompt, "Multiple Choice Question Generation")
         
         # Parse response
-        question_data = json.loads(response)
+        response_data = json.loads(response)
         
-        # Validate response has required fields
-        required_fields = ["question_text", "options", "correct_answer_index", "explanation"]
-        for field in required_fields:
-            if field not in question_data:
-                print(f"Error: Response missing {field} field for category {category}")
-                return None
+        if "questions" not in response_data or not isinstance(response_data["questions"], list):
+            print(f"Error: Response missing questions array for category {category}")
+            return None
+            
+        questions_data = []
+        questions_to_store = []
+        
+        # Validate each question
+        for question in response_data["questions"]:
+            # Validate response has required fields
+            required_fields = ["question_text", "options", "correct_answer_index", "explanation"]
+            if not all(field in question for field in required_fields):
+                print(f"Error: Question missing required fields for category {category}")
+                continue
                 
-        # Validate options and correct answer
-        if len(question_data["options"]) != 4:
-            print(f"Error: Expected 4 options, got {len(question_data['options'])}")
-            return None
-            
-        if not isinstance(question_data["correct_answer_index"], int) or \
-           question_data["correct_answer_index"] < 0 or \
-           question_data["correct_answer_index"] > 3:
-            print(f"Error: Invalid correct_answer_index: {question_data['correct_answer_index']}")
-            return None
-            
-        # Store question in database if knowledge_id is provided
-        if knowledge_id:
-            try:
-                from database.supabase_manager import supabase_manager
-                db_question = supabase_manager.create_multiple_choice_question({
-                    "question_text": question_data["question_text"],
-                    "options": question_data["options"],
-                    "correct_answer_index": question_data["correct_answer_index"],
-                    "explanation": question_data["explanation"],
+            # Validate options and correct answer
+            if len(question["options"]) != 4:
+                print(f"Error: Expected 4 options, got {len(question['options'])}")
+                continue
+                
+            if not isinstance(question["correct_answer_index"], int) or \
+               question["correct_answer_index"] < 0 or \
+               question["correct_answer_index"] > 3:
+                print(f"Error: Invalid correct_answer_index: {question['correct_answer_index']}")
+                continue
+                
+            # Add question to list for batch storage
+            if knowledge_id:
+                questions_to_store.append({
+                    "question_text": question["question_text"],
+                    "options": question["options"],
+                    "correct_answer_index": question["correct_answer_index"],
+                    "explanation": question["explanation"],
                     "knowledge_id": knowledge_id
                 })
-                if db_question:
-                    # Add database ID to response
-                    question_data["question_id"] = db_question["id"]
+            
+            questions_data.append(question)
+        
+        # Store questions in batch if we have any valid ones
+        if knowledge_id and questions_to_store:
+            try:
+                from database.supabase_manager import supabase_manager
+                stored_questions = supabase_manager.create_multiple_choice_questions(questions_to_store)
+                
+                # Update questions_data with database IDs
+                for i, stored_q in enumerate(stored_questions):
+                    if i < len(questions_data):  # Safety check
+                        questions_data[i]["question_id"] = stored_q["id"]
             except Exception as e:
-                print(f"Error storing multiple choice question: {e}")
+                print(f"Error storing multiple choice questions in batch: {e}")
                 # Continue without storing if there's an error
                 pass
-            
-        return question_data
+        
+        # Shuffle the questions before returning
+        if questions_data:
+            random.shuffle(questions_data)
+        
+        return questions_data if questions_data else None
         
     except json.JSONDecodeError as e:
         print(f"Error parsing question response for category {category}: {e}")
         return None
     except Exception as e:
-        print(f"Error generating question for category {category}: {e}")
+        print(f"Error generating questions for category {category}: {e}")
         return None

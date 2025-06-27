@@ -239,20 +239,22 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
 # Multiple Choice Question Endpoints
 @router.post("/multiple-choice/generate", response_model=GenerateMultipleChoiceResponse)
 async def generate_multiple_choice_questions(
-    num_questions: int = Query(default=3, ge=1, le=20, description="Number of questions to generate"),
+    num_questions: int = Query(default=3, ge=1, le=20, description="Total number of questions to generate"),
     main_category: str | None = Query(default=None, description="Optional main category to filter questions by")
 ):
     """
     Generate multiple choice questions from the knowledge base.
+    Questions will be distributed evenly across randomly selected knowledge items.
     Questions will be evaluated by ChatGPT later.
     
     This endpoint:
     1. Retrieves random knowledge items from the database
-    2. Uses Azure OpenAI to generate thought-provoking multiple choice questions
-    3. Returns questions with their knowledge_id for later evaluation
+    2. Distributes total questions evenly across selected items
+    3. Uses Azure OpenAI to generate thought-provoking multiple choice questions
+    4. Returns questions with their knowledge_id for later evaluation
     
     Args:
-        num_questions: Number of questions to generate (1-20)
+        num_questions: Total number of questions to generate (1-20)
         main_category: Optional main category to filter questions by
     """
     try:
@@ -283,63 +285,70 @@ async def generate_multiple_choice_questions(
                 detail="No knowledge items with valid IDs found"
             )
         
+        # Calculate how many knowledge items to use based on total questions
+        # Use at most num_questions items, but at least num_questions/5 items
+        # This ensures 1-5 questions per item while using as many items as reasonable
+        min_items = max(1, num_questions // 5)  # At most 5 questions per item
+        max_items = min(num_questions, len(valid_items))  # At least 1 question per item
+        num_items = random.randint(min_items, max_items)
+        
         # Randomly select items to generate questions from
-        selected_items = random.sample(valid_items, min(num_questions, len(valid_items)))
+        selected_items = random.sample(valid_items, num_items)
+        
+        # Distribute questions across items
+        # First, give each item the minimum number of questions
+        questions_per_item = [num_questions // num_items] * num_items
+        # Then distribute remaining questions randomly
+        remaining = num_questions - sum(questions_per_item)
+        if remaining > 0:
+            # Randomly select items to receive extra questions
+            lucky_items = random.sample(range(num_items), remaining)
+            for idx in lucky_items:
+                questions_per_item[idx] += 1
 
         # Generate questions for each selected item
-        questions_to_create = []
+        all_questions = []
         
-        for item in selected_items:
+        for item, num_item_questions in zip(selected_items, questions_per_item):
             # Get categories and content
             item_main_category = item.get('main_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
-            # Generate multiple choice question using our dedicated function
-            question_data = generate_multiple_choice_question(
+            # Generate multiple choice questions using our dedicated function
+            questions_data = generate_multiple_choice_question(
                 category=item_main_category,
                 content=content,
-                knowledge_id=knowledge_id
+                knowledge_id=knowledge_id,
+                num_questions=num_item_questions
             )
             
-            if question_data:
-                questions_to_create.append({
-                    "question_text": question_data['question_text'],
-                    "options": question_data['options'],
-                    "correct_answer_index": question_data['correct_answer_index'],
-                    "explanation": question_data['explanation'],
-                    "knowledge_id": knowledge_id
-                })
+            if questions_data:
+                # Create response objects for each question
+                for q in questions_data:
+                    # Ensure question_id is an integer, skip if not available
+                    question_id = q.get('question_id')
+                    if question_id is None:
+                        continue
+                        
+                    question = MultipleChoiceQuestionResponse(
+                        question_id=question_id,
+                        question_text=q['question_text'],
+                        options=q['options'],
+                        knowledge_id=knowledge_id,
+                        selected_answer_index=0
+                    )
+                    all_questions.append(question)
         
-        if not questions_to_create:
+        if not all_questions:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to generate any valid multiple choice questions"
             )
         
-        # Store questions in database in batch
-        db_questions = supabase_manager.create_multiple_choice_questions(questions_to_create)
-        if not db_questions:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to store multiple choice questions"
-            )
-        
-        # Create response objects
-        questions = [
-            MultipleChoiceQuestionResponse(
-                question_id=q['id'],
-                question_text=q['question_text'],
-                options=q['options'],
-                knowledge_id=q['knowledge_id'],
-                selected_answer_index=0
-            )
-            for q in db_questions
-        ]
-        
         return GenerateMultipleChoiceResponse(
-            questions=questions,
-            total_questions=len(questions)
+            questions=all_questions,
+            total_questions=len(all_questions)
         )
         
     except Exception as e:
