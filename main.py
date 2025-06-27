@@ -31,7 +31,7 @@ from models import (
 )
 from config.settings import settings
 from core.similarity import SSC
-from core.llm_updater import LLMUpdater
+from core.llm_updater import LLMUpdater, _EMBEDDINGS_CACHE_FILE, precompute_main_category_embeddings
 from database.supabase_manager import supabase_manager
 from utils.category_mapping import get_all_subject_categories
 from utils.helpers import log_api_call, create_error_response
@@ -56,6 +56,13 @@ async def lifespan(app: FastAPI):
         # Validate settings
         settings.validate()
         logger.info("Configuration validated successfully")
+        
+        # Precompute embeddings if needed
+        if not os.path.exists(_EMBEDDINGS_CACHE_FILE):
+            logger.info("No main category embedding cache found. Precomputing embeddings...")
+            precompute_main_category_embeddings()
+        else:
+            logger.info("Main category embedding cache found. Skipping precompute.")
         
         # Test Supabase connection
         stats = supabase_manager.get_database_stats()

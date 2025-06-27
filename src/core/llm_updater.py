@@ -1,8 +1,15 @@
 import openai
 import json
+import pickle
+import os
 from typing import List, Dict, Optional
 from config.settings import settings
 from utils.category_mapping import get_all_subject_categories, get_subject_categories_prompt_text, validate_subject_category, get_subject_category_fallback
+from core.similarity import SSC
+
+# Cache for main category embeddings to avoid recalculating
+_MAIN_CATEGORY_EMBEDDINGS_CACHE = {}
+_EMBEDDINGS_CACHE_FILE = "main_category_embeddings.pkl"
 
 def _ensure_string(value):
     """Ensure a value is a string, converting lists to space-separated strings."""
@@ -14,6 +21,182 @@ def _ensure_string(value):
         return ""
     else:
         return str(value)
+
+def precompute_main_category_embeddings():
+    """
+    Pre-compute and save embeddings for all main categories
+    This should be run once during setup/deployment
+    """
+    from core.embeddings import get_embedding
+    main_categories = get_all_subject_categories()
+    
+    print("🔄 Pre-computing main category embeddings...")
+    embeddings = {}
+    
+    for i, category in enumerate(main_categories, 1):
+        print(f"  Computing embedding {i}/{len(main_categories)}: {category}")
+        embeddings[category] = get_embedding(category)
+    
+    # Save to file
+    with open(_EMBEDDINGS_CACHE_FILE, 'wb') as f:
+        pickle.dump(embeddings, f)
+    
+    print(f"✅ Saved embeddings for {len(main_categories)} main categories to {_EMBEDDINGS_CACHE_FILE}")
+    return embeddings
+
+def _get_main_category_embeddings():
+    """
+    Get embeddings for all main categories, using cache for efficiency
+    OPTIMIZED: Loads from pre-computed file if available
+    """
+    global _MAIN_CATEGORY_EMBEDDINGS_CACHE
+    
+    if not _MAIN_CATEGORY_EMBEDDINGS_CACHE:
+        # Try to load from pre-computed file first
+        if os.path.exists(_EMBEDDINGS_CACHE_FILE):
+            try:
+                print(f"📂 Loading pre-computed embeddings from {_EMBEDDINGS_CACHE_FILE}...")
+                with open(_EMBEDDINGS_CACHE_FILE, 'rb') as f:
+                    _MAIN_CATEGORY_EMBEDDINGS_CACHE = pickle.load(f)
+                print(f"✅ Loaded {len(_MAIN_CATEGORY_EMBEDDINGS_CACHE)} cached embeddings")
+            except Exception as e:
+                print(f"⚠️ Failed to load cached embeddings: {e}")
+                print("🔄 Computing embeddings on first use...")
+                _MAIN_CATEGORY_EMBEDDINGS_CACHE = precompute_main_category_embeddings()
+        else:
+            print("🔄 No pre-computed embeddings found. Computing on first use...")
+            _MAIN_CATEGORY_EMBEDDINGS_CACHE = precompute_main_category_embeddings()
+    
+    return _MAIN_CATEGORY_EMBEDDINGS_CACHE
+
+def _map_subcategory_to_main_category_fast(sub_category: str) -> str:
+    """
+    Fast keyword-based mapping for immediate results
+    Used as fallback while embeddings are being computed
+    """
+    if not sub_category:
+        return "General Studies"
+    
+    sub_lower = sub_category.lower()
+    
+    # Quick keyword matching (much faster than embeddings)
+    keyword_mapping = {
+        # STEM
+        'math': 'Mathematics', 'algebra': 'Mathematics', 'calculus': 'Mathematics', 'geometry': 'Mathematics',
+        'physics': 'Physics', 'quantum': 'Physics', 'mechanics': 'Physics', 'relativity': 'Physics',
+        'chemistry': 'Chemistry', 'chemical': 'Chemistry', 'molecule': 'Chemistry', 'reaction': 'Chemistry',
+        'biology': 'Biology', 'biological': 'Biology', 'cell': 'Biology', 'genetic': 'Biology', 'organism': 'Biology',
+        'computer': 'Computer Science', 'programming': 'Computer Science', 'software': 'Computer Science', 'algorithm': 'Computer Science',
+        'engineering': 'Engineering', 'mechanical': 'Engineering', 'electrical': 'Engineering', 'civil': 'Engineering',
+        'medicine': 'Medicine', 'medical': 'Medicine', 'health': 'Medicine', 'clinical': 'Medicine', 'treatment': 'Medicine',
+        'environment': 'Environmental Science', 'climate': 'Environmental Science', 'ecology': 'Environmental Science',
+        'astronomy': 'Astronomy', 'space': 'Astronomy', 'planet': 'Astronomy', 'star': 'Astronomy',
+        'geology': 'Geology', 'earth': 'Geology', 'rock': 'Geology', 'mineral': 'Geology',
+        
+        # Social Sciences
+        'psychology': 'Psychology', 'psychological': 'Psychology', 'behavior': 'Psychology', 'mental': 'Psychology',
+        'sociology': 'Sociology', 'social': 'Sociology', 'society': 'Sociology', 'culture': 'Sociology',
+        'anthropology': 'Anthropology', 'ethnography': 'Anthropology', 'cultural': 'Anthropology',
+        'politics': 'Political Science', 'political': 'Political Science', 'government': 'Political Science',
+        'economics': 'Economics', 'economic': 'Economics', 'economy': 'Economics', 'market': 'Economics',
+        'geography': 'Geography', 'geographical': 'Geography', 'map': 'Geography', 'location': 'Geography',
+        'language': 'Linguistics', 'linguistic': 'Linguistics', 'grammar': 'Linguistics', 'syntax': 'Linguistics',
+        'archaeology': 'Archaeology', 'artifact': 'Archaeology', 'excavation': 'Archaeology',
+        
+        # Humanities
+        'history': 'History', 'historical': 'History', 'past': 'History', 'ancient': 'History',
+        'philosophy': 'Philosophy', 'philosophical': 'Philosophy', 'ethics': 'Philosophy', 'logic': 'Philosophy',
+        'literature': 'Literature', 'literary': 'Literature', 'novel': 'Literature', 'poetry': 'Literature',
+        'religion': 'Religious Studies', 'religious': 'Religious Studies', 'theology': 'Religious Studies',
+        'art': 'Art History', 'artistic': 'Art History', 'painting': 'Art History', 'sculpture': 'Art History',
+        'music': 'Music Theory', 'musical': 'Music Theory', 'composition': 'Music Theory', 'melody': 'Music Theory',
+        'theater': 'Theater Arts', 'drama': 'Theater Arts', 'performance': 'Theater Arts', 'acting': 'Theater Arts',
+        
+        # Applied & Professional
+        'business': 'Business Administration', 'management': 'Business Administration', 'strategy': 'Business Administration',
+        'law': 'Law', 'legal': 'Law', 'court': 'Law', 'justice': 'Law',
+        'education': 'Education', 'teaching': 'Education', 'learning': 'Education', 'pedagogy': 'Education',
+        'communication': 'Communications', 'media': 'Communications', 'journalism': 'Communications',
+        'architecture': 'Architecture', 'architectural': 'Architecture', 'building': 'Architecture',
+        'agriculture': 'Agriculture', 'farming': 'Agriculture', 'crop': 'Agriculture',
+        'nutrition': 'Nutrition', 'diet': 'Nutrition', 'food': 'Nutrition',
+        
+        # Arts & Creative
+        'visual': 'Visual Arts', 'graphic': 'Visual Arts', 'design': 'Visual Arts', 'illustration': 'Visual Arts',
+        'writing': 'Creative Writing', 'creative': 'Creative Writing', 'story': 'Creative Writing', 'narrative': 'Creative Writing',
+        'film': 'Film Studies', 'movie': 'Film Studies', 'cinema': 'Film Studies', 'video': 'Film Studies',
+        'photography': 'Photography', 'photo': 'Photography', 'camera': 'Photography',
+        
+        # Health & Physical
+        'public health': 'Public Health', 'epidemiology': 'Public Health',
+        'exercise': 'Physical Education', 'fitness': 'Physical Education', 'sport': 'Physical Education',
+        'therapy': 'Therapy & Rehabilitation', 'rehabilitation': 'Therapy & Rehabilitation',
+        
+        # Modern/Interdisciplinary
+        'data': 'Data Science', 'analytics': 'Data Science', 'big data': 'Data Science',
+        'security': 'Cybersecurity', 'cyber': 'Cybersecurity', 'encryption': 'Cybersecurity',
+        'biotechnology': 'Biotechnology', 'biotech': 'Biotechnology',
+        'cognitive': 'Cognitive Science', 'neuroscience': 'Cognitive Science', 'brain': 'Cognitive Science',
+        'international': 'International Studies', 'global': 'International Studies',
+        'gender': 'Gender Studies', 'feminist': 'Gender Studies',
+        'urban': 'Urban Planning', 'city planning': 'Urban Planning'
+    }
+    
+    # Check for exact matches first
+    for keyword, category in keyword_mapping.items():
+        if keyword in sub_lower:
+            return category
+    
+    return "General Studies"
+
+def _map_subcategory_to_main_category(sub_category: str, use_fast_fallback: bool = True) -> str:
+    """
+    Map a sub-category to the most semantically similar main category using embeddings
+    OPTIMIZED: Uses cached main category embeddings for efficiency
+    FALLBACK: Uses fast keyword matching if embeddings not available
+    """
+    if not sub_category:
+        return "General Studies"
+    
+    # Try to get cached embeddings first
+    try:
+        main_category_embeddings = _get_main_category_embeddings()
+        
+        # If we have embeddings, use semantic similarity
+        if main_category_embeddings:
+            # Get embedding for the sub-category
+            from core.embeddings import get_embedding
+            sub_category_embedding = get_embedding(sub_category)
+            
+            best_match = "General Studies"
+            highest_similarity = 0.0
+            
+            # Calculate cosine similarity
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            emb1 = np.array(sub_category_embedding).reshape(1, -1)
+            
+            # Compare with each main category
+            for main_cat, main_cat_embedding in main_category_embeddings.items():
+                emb2 = np.array(main_cat_embedding).reshape(1, -1)
+                similarity = cosine_similarity(emb1, emb2)[0][0]
+                
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    best_match = main_cat
+            
+            return best_match
+    
+    except Exception as e:
+        print(f"⚠️ Semantic mapping failed: {e}")
+    
+    # Fallback to fast keyword matching
+    if use_fast_fallback:
+        print("🔄 Using fast keyword-based fallback mapping...")
+        return _map_subcategory_to_main_category_fast(sub_category)
+    
+    return "General Studies"
 
 def call_azure_openai_llm(prompt: str) -> str:
     """
@@ -64,7 +247,8 @@ Your communication style is methodical, explanatory, and system-aware. You avoid
 
 def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Optional[str] = None, llm_type: str = "azure_openai") -> Dict:
     """
-    Generate 4 different recommendations using Azure OpenAI with goal-based semantic analysis
+    Generate 3 different recommendations using Azure OpenAI with goal-based semantic analysis
+    OPTIMIZED: LLM only generates sub-categories, main categories are mapped via semantic similarity
     
     Args:
         input_text: New text input from user
@@ -98,10 +282,6 @@ def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Option
     else:
         context_sections.append("SIMILAR EXISTING KNOWLEDGE: None found\n")
     
-    # Academic categories context
-    categories_text = """Available academic categories: Mathematics, Physics, Chemistry, Biology, Computer Science, Engineering, Medicine, Environmental Science, Astronomy, Geology, Psychology, Sociology, Anthropology, Political Science, Economics, Geography, Linguistics, Archaeology, History, Philosophy, Literature, Languages, Religious Studies, Art History, Music Theory, Theater Arts, Business Administration, Law, Education, Communications, Journalism, Architecture, Agriculture, Nutrition, Visual Arts, Music, Creative Writing, Film Studies, Photography, Design, Public Health, Physical Education, Sports Science, Therapy & Rehabilitation, Data Science, Cybersecurity, Biotechnology, Cognitive Science, International Studies, Gender Studies, Urban Planning, General Studies"""
-    context_sections.append(categories_text)
-    
     # Construct the enhanced semantic prompt
     goal_instructions = ""
     goal_fields_example = ""
@@ -132,31 +312,23 @@ INPUT: {input_text}
 
 INSTRUCTIONS:
 1. First, evaluate the input's relevance to the goal (if provided) and assign a goal_relevance_score (1-10)
-   GOAL RELEVANCE SCORING GUIDELINES:
-   - 1-2: Content is completely unrelated to the goal (e.g., history content when goal is gaming)
-   - 3-4: Content has very weak or tangential connection to the goal
-   - 5-6: Content has some relevance but requires significant transformation to align with goal
-   - 7-8: Content is moderately relevant and can be adapted to the goal
-   - 9-10: Content is highly relevant and directly supports the goal
-2. Provide a brief explanation for the goal_relevance_score
-3. Provide exactly 3 distinct recommendations
-4. Preserve all content detail - never summarize or paraphrase
-5. Use semantic relationships with existing knowledge
-6. Select main_category from academic subjects list (exact match required)
-7. Generate 3-4 meaningful tags per recommendation (tags should be related to the content and category)
-8. CRITICAL: Write instructions for transforming the input text into updated text
+2. Provide exactly 3 distinct recommendations
+3. Preserve all content detail - never summarize or paraphrase
+4. Use semantic relationships with existing knowledge
+5. Generate specific, descriptive sub-categories (e.g., "quantum mechanics applications", "Renaissance art techniques", "startup financial modeling")
+6. Generate 3-4 meaningful tags per recommendation (tags should be related to the content and category)
+7. CRITICAL: Write instructions for transforming the input text into updated text
 
 OUTPUT FORMAT (MUST BE VALID JSON):
 {{
-  "goal_relevance_score": 7,
+  "goal_relevance_score": 1-10,
   "goal_relevance_explanation": "Brief explanation of why this score was assigned",
   "recommendations": [
     {{
       "option_number": 1,
       "change": "2-3 sentences explaining this approach",
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
-      "main_category": "EXACT academic subject name",
-      "sub_category": "specific sub-topic",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
       "action_type": "merge/update/create_new"{goal_fields_example}
     }},
@@ -164,8 +336,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
       "option_number": 2,
       "change": "2-3 sentences explaining an alternative approach",
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
-      "main_category": "EXACT academic subject name",
-      "sub_category": "specific sub-topic",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
       "action_type": "merge/update/create_new"{goal_fields_example}
     }},
@@ -173,8 +344,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
       "option_number": 3,
       "change": "2-3 sentences explaining regular semantic approach.",
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
-      "main_category": "EXACT academic subject name",
-      "sub_category": "specific sub-topic",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
       "action_type": "merge/update/create_new"
     }}
@@ -182,7 +352,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
 }}
 
 REQUIREMENTS:
-- Academic subject must exactly match provided list
+- Generate specific, descriptive sub-categories (main categories will be automatically mapped)
 - Never reduce content detail
 - Instructions should focus ONLY on text transformation (restructure, add sections, modify language, combine content)
 - Do NOT include semantic search, external operations, or citations in instructions
@@ -217,6 +387,13 @@ REQUIREMENTS:
             goal_relevance_score = 5
             goal_relevance_explanation = 'No goal relevance analysis available'
             recommendations = response_data if isinstance(response_data, list) else []
+        
+        # OPTIMIZATION: Map sub-categories to main categories using semantic similarity
+        for rec in recommendations:
+            sub_category = rec.get('sub_category', 'General')
+            # Map sub-category to main category using semantic similarity
+            main_category = _map_subcategory_to_main_category(sub_category)
+            rec['main_category'] = main_category
         
         # Add goal-specific fields to options 1 & 2 when goal is provided
         if goal:
