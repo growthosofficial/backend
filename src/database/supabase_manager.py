@@ -468,47 +468,5 @@ class SupabaseManager:
             print(f"Error getting multiple choice questions: {e}")
             return []
 
-    def create_multiple_choice_question(self, question_data: Dict) -> Optional[Dict]:
-        """
-        Store a multiple choice question in the database
-        
-        Args:
-            question_data: Dictionary containing:
-                - question_text: The question text
-                - options: List of 4 options
-                - correct_answer_index: Index of correct answer (0-3)
-                - explanation: Explanation of answers
-                - knowledge_id: ID of related knowledge item
-                
-        Returns:
-            Created question record or None if failed
-        """
-        try:
-            result = self.supabase.table('multiple_choice_questions').insert(question_data).execute()
-            return result.data[0] if result.data else None
-            
-        except Exception as e:
-            print(f"Error creating multiple choice question: {e}")
-            return None
-
-    def get_multiple_choice_question(self, question_id: int) -> Optional[Dict]:
-        """
-        Get a multiple choice question by ID
-        
-        Args:
-            question_id: ID of the question to retrieve
-            
-        Returns:
-            Question data or None if not found
-        """
-        try:
-            result = self.supabase.table('multiple_choice_questions').select('*').eq('id', question_id).single().execute()
-            return result.data if result.data else None
-            
-        except Exception as e:
-            print(f"Error getting multiple choice question: {e}")
-            return None
-
-
 # Create global instance
 supabase_manager = SupabaseManager()
