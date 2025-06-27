@@ -427,17 +427,19 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
                 is_correct = selected_index == question['correct_answer_index']
                 
                 answer_text = f"""
--------------------------------
 Question {i+1}: {question['question_text']}
 Selected Answer: {question['options'][selected_index]}
 Correct Answer: {question['options'][question['correct_answer_index']]}
--------------------------------
+Is Correct: {is_correct}
 """
                 answer_texts.append(answer_text)
             
+            # Join answers with a newline separator
+            answers_text = "\n".join(answer_text.strip() for answer_text in answer_texts)
+            
             # Get evaluation feedback for all answers in this group
             evaluation = evaluate_multiple_choice_answers(
-                answers_text="\n---\n".join(answer_text.strip() for answer_text in answer_texts),
+                answers_text=answers_text,
                 knowledge_content=knowledge_item.get('content', ''),
                 main_category=knowledge_item.get('main_category', 'Unknown'),
                 sub_category=knowledge_item.get('sub_category', 'Unknown')
@@ -448,7 +450,7 @@ Correct Answer: {question['options'][question['correct_answer_index']]}
                 knowledge_content=knowledge_item.get('content', ''),
                 new_evaluation={
                     'question_text': 'Multiple Choice Questions',
-                    'answer_text': "\n---\n".join(answer_text.strip() for answer_text in answer_texts),
+                    'answer_text': answers_text,
                     'feedback': evaluation['feedback'],
                     'question_type': QuestionType.MULTIPLE_CHOICE
                 },

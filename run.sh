@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Create tmp/prompts directory if it doesn't exist
+rm -rf tmp/prompts
 mkdir -p tmp/prompts
 
 # Start the application

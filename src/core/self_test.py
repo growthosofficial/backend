@@ -68,19 +68,17 @@ def format_evaluation_history(evaluations: List[Dict]) -> str:
         if eval_type == QuestionType.MULTIPLE_CHOICE:
             eval_history += f"""
 Evaluation #{i} - Multiple Choice
--------------------------------
 Question: {eval.get('question_text', '')}
 Your Answer: {eval.get('answer_text', '')}
 Correct Answer: {eval.get('correct_answer', '')}
--------------------------------"""
+"""
         else:
             eval_history += f"""
 Evaluation #{i} - Free Text
--------------------------------
 Question: {eval.get('question_text', '')}
 Your Answer: {eval.get('answer_text', '')}
 Feedback: {eval.get('feedback', '')}
--------------------------------"""
+"""
 
     return eval_history
 
@@ -395,10 +393,26 @@ def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, pr
 
 Current Mastery: {current_mastery}
 
-Guidelines:
-- Good explanations increase mastery more than correct recognition
-- Poor answers (especially "I don't know") decrease mastery
-- Consider answer quality and type when adjusting mastery
+CRITICAL MASTERY GUIDELINES:
+1. Free Text Answer Evaluation:
+   - Good explanations increase mastery (0.1-0.2 increase)
+   - Poor answers decrease mastery (0.1-0.2 decrease)
+   - "I don't know" responses significantly decrease mastery (0.2-0.3 decrease)
+   - Partial understanding can be recognized in free text answers
+
+2. Multiple Choice History Evaluation (if any):
+   - Multiple choice answers are binary - either fully correct or wrong
+   - NO partial credit for wrong multiple choice answers
+   - Each wrong multiple choice decreases mastery by 0.1-0.2
+   - Each correct multiple choice increases mastery by 0.05-0.1
+   - Multiple consecutive correct answers needed to show mastery
+   - A single wrong answer indicates gaps in understanding
+
+3. General Rules:
+   - Recent performance has more weight than older answers
+   - Free text answers have more impact than multiple choice
+   - Consider answer quality and depth of explanation
+   - Look for patterns of understanding vs. misconceptions
 
 Knowledge Content:
 {knowledge_content}
@@ -407,7 +421,7 @@ Question Type: {question_type}
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Previous Answers (newest to oldest, free text weighs more than multiple choice):
+Previous Answers (newest to oldest):
 {evaluation_history}
 
 Response Format:
@@ -417,11 +431,11 @@ Response Format:
 }}
 
 Example responses:
-"You have a good understanding of basic circuit components and Ohm's law. You can explain voltage and current flow clearly. You need to work on understanding parallel circuits and power calculations."
+"Your free text answer shows good understanding of database concepts, but your multiple choice history reveals gaps in normalization forms. While you can explain relationships well, the pattern of wrong multiple choice answers about normalization indicates areas needing review."
 
-"You show basic grasp of SQL queries and table joins. You can write simple SELECT statements but struggle with complex joins and subqueries. You should focus on practicing GROUP BY and aggregate functions."
+"Your detailed explanation of neural networks demonstrates strong understanding. However, recent multiple choice answers about activation functions were incorrect. Focus on connecting your theoretical knowledge with specific technical details."
 
-"You're still developing understanding of neural networks. You recognize basic terminology but can't explain backpropagation or activation functions. You need to review the fundamental concepts."'''
+"Your answers show declining mastery. The current 'I don't know' response and previous wrong multiple choice answers suggest fundamental gaps in understanding. You need to review the basic concepts before proceeding."'''
 
     try:
         # Format evaluation history
@@ -511,14 +525,17 @@ def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Di
 
 Current Mastery: {current_mastery}
 
-Guidelines:
-- Multiple choice answers show recognition and basic understanding
-- Consistent correct answers indicate good grasp of fundamentals
-- Pattern of incorrect answers may reveal specific misconceptions
-- Consider answer patterns and explanations when adjusting mastery
-- Recent performance should have more weight than older answers
-- Quick, correct answers suggest stronger mastery than hesitant ones
-- Look for improvement trends over time
+CRITICAL MASTERY GUIDELINES:
+1. Multiple choice answers are binary - either fully correct or wrong
+2. NO partial credit for wrong answers, even if reasoning shows some understanding
+3. Wrong answers should DECREASE mastery more significantly than correct answers increase it
+4. Mastery calculation rules:
+   - Each wrong answer should decrease mastery by 0.1-0.2
+   - Each correct answer should increase mastery by 0.05-0.1
+   - Multiple consecutive correct answers needed to show mastery
+   - A single wrong answer indicates gaps in understanding
+5. Recent performance has more weight than older answers
+6. Free text answers (if any) should have more impact than multiple choice
 
 Knowledge Content:
 {knowledge_content}
@@ -536,11 +553,11 @@ Response Format:
 }}
 
 Example responses:
-"Your multiple choice performance shows strong recognition of key concepts with 80% accuracy. You consistently identify correct database relationships but sometimes confuse normalization forms. Focus on reviewing the specific criteria for 2NF vs 3NF."
+"Your multiple choice performance shows inconsistent understanding. While you correctly identified database relationships in 2 questions, the wrong answer about normalization forms indicates a fundamental gap. Focus on reviewing the specific criteria for different normalization forms."
 
-"Recent answers demonstrate improved understanding of quantum mechanics principles. You correctly identify wave-particle duality examples but still have difficulty with uncertainty principle applications. Continue practicing problems involving position-momentum uncertainty."
+"Recent answers show a pattern of incorrect responses about quantum mechanics principles. Each wrong answer suggests gaps in core understanding. You need to review the fundamental concepts before moving to more complex applications."
 
-"Multiple choice results indicate basic familiarity with machine learning concepts. While you can recognize supervised vs unsupervised approaches, you often mix up specific algorithms like k-means and kNN. Review the key characteristics that distinguish clustering from classification algorithms."'''
+"Multiple choice results demonstrate solid grasp of machine learning basics. You've consistently answered correctly about algorithm types and their applications. Continue practicing with more advanced concepts to further strengthen understanding."'''
 
     try:
         # Format evaluation history
