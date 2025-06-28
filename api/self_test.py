@@ -19,7 +19,7 @@ from models import (
     BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
     MultipleChoiceQuestion, GenerateMultipleChoiceResponse, MultipleChoiceQuestionResponse,
     MultipleChoiceAnswerRequest, MultipleChoiceBatchAnswerRequest,
-    MultipleChoiceBatchEvaluationResponse
+    MultipleChoiceBatchEvaluationResponse, MultipleChoiceEvaluationDetail
 )
 
 # Create router
@@ -496,7 +496,11 @@ Is Correct: {is_correct}
                     mastery_explanation=mastery_result['explanation'],
                     sample_answer=None,  # No sample answer for multiple choice
                     is_correct=is_correct,
-                    multiple_choice_question_id=question['id']
+                    multiple_choice_question_id=question['id'],
+                    # Add multiple choice specific fields
+                    options=question['options'],
+                    selected_index=selected_index,
+                    correct_answer_index=question['correct_answer_index']
                 )
                 
                 all_evaluations.append(eval_response)

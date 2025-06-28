@@ -70,21 +70,24 @@ class MultipleChoiceBatchAnswerRequest(BaseModel):
     answers: List[MultipleChoiceAnswerRequest] = Field(..., description="List of answers to evaluate")
 
 class EvaluationResponse(BaseModel):
-    """Response model for answer evaluation"""
-    question_text: str = Field(..., description="The original question that was asked")
-    answer: str = Field(..., description="Your submitted answer")
-    score: int | None = Field(None, ge=1, le=5, description="Score from 1-5 (only for free text answers)")
-    feedback: str = Field(..., description="Overall feedback on the answer")
-    correct_points: List[str] = Field(default_factory=list, description="Points that were correct")
-    incorrect_points: List[str] = Field(default_factory=list, description="Points that were incorrect or missing")
-    evaluation_id: int | None = Field(None, description="Database ID of the stored evaluation")
-    knowledge_id: int = Field(..., description="ID of the knowledge item")
-    mastery: float = Field(..., ge=0, le=1, description="Updated mastery level after this evaluation")
-    mastery_explanation: str = Field("", description="Explanation of the mastery level calculation")
-    sample_answer: str | None = Field(None, description="An example of a good answer to this question")
+    """Response model for evaluation results"""
+    question_text: str
+    answer: str
+    score: float | None = None
+    feedback: str
+    correct_points: List[str]
+    incorrect_points: List[str]
+    evaluation_id: int | None = None
+    knowledge_id: int
+    mastery: float
+    mastery_explanation: str
+    sample_answer: str | None = None
+    is_correct: bool | None = None
+    multiple_choice_question_id: int | None = None
     # Multiple choice specific fields
-    is_correct: bool | None = Field(None, description="For multiple choice: whether the answer was correct")
-    multiple_choice_question_id: int | None = Field(None, description="For multiple choice: ID of the question")
+    options: List[str] | None = None
+    selected_index: int | None = None
+    correct_answer_index: int | None = None
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -247,7 +250,16 @@ class ErrorResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="Error timestamp")
 
 
+class MultipleChoiceEvaluationDetail(BaseModel):
+    """Detailed evaluation for a multiple choice question"""
+    question_text: str
+    options: List[str]
+    selected_index: int
+    correct_answer_index: int
+    is_correct: bool
+    feedback: str
+
 class MultipleChoiceBatchEvaluationResponse(BaseModel):
-    """Response model for batch multiple choice evaluation"""
-    evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations")
-    total_evaluated: int = Field(..., description="Total number of answers evaluated")
+    """Response model for batch multiple choice answer evaluation"""
+    evaluations: List[EvaluationResponse]
+    total_evaluated: int
