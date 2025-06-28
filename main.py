@@ -97,7 +97,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173", 
         "http://localhost:3003",
-        "http://frontend-ruby-seven-45.vercel.app",
+        "https://frontend-axc2vv97r-growthos-projects.vercel.app",
+        "https://frontend-ruby-seven-45.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
