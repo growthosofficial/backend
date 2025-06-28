@@ -317,7 +317,7 @@ INSTRUCTIONS:
 4. Use semantic relationships with existing knowledge
 5. Generate specific, descriptive sub-categories (e.g., "quantum mechanics applications", "Renaissance art techniques", "startup financial modeling")
 6. Generate 3-4 meaningful tags per recommendation (tags should be related to the content and category)
-7. Action type should reflect the changes (create_new if no existing knowledge is found, merge/update if otherwise)
+7. IMPORTANT: Action type should reflect the nature of the changes (create_new if no existing knowledge is found, merge/update if existing knowledge is found))
 8. CRITICAL: Write instructions for transforming the input text into updated text
 
 OUTPUT FORMAT (MUST BE VALID JSON):
@@ -331,7 +331,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
       "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
-      "action_type": "merge/update/create_new"
+      "action_type": "merge or update or create_new"
     }},
     {{
       "option_number": 2,
@@ -339,7 +339,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
       "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
-      "action_type": "merge/update/create_new"
+      "action_type": "merge or update or create_new"
     }},
     {{
       "option_number": 3,
@@ -347,7 +347,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
       "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
       "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
       "tags": ["tag1", "tag2", "tag3"],
-      "action_type": "merge/update/create_new"
+      "action_type": "merge or update or create_new"
     }}
   ]
 }}
