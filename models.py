@@ -120,32 +120,23 @@ class ProcessTextRequest(BaseModel):
 # RESPONSE MODELS (read-only data from database)
 
 class RecommendationResponse(BaseModel):
-    option_number: int = Field(..., description="Recommendation option number (1-4)")
+    option_number: int = Field(..., description="Recommendation option number (1-3)")
     change: str = Field(..., description="Detailed explanation of changes and benefits")
-    updated_text: str = Field(..., description="Complete updated/new text content")
+    instructions: str = Field(..., description="Instructions for how to apply this recommendation to the input text")
     main_category: str = Field(..., description="Main academic category")
     sub_category: str = Field(..., description="Specific sub-category")
     tags: list[str] = Field(default_factory=list, description="Semantic-optimized tags")
-    preview: str = Field(..., description="Short preview of content")
     action_type: str = Field(..., description="Action type: merge/update/create_new")
-    reasoning: str = Field(..., description="Reasoning for this approach")
-    semantic_coherence: str = Field(..., description="Coherence assessment: high/medium/low")
-    is_goal_aware: bool = Field(..., description="Whether this considered the goal")
-    
-    # Goal-specific fields (optional)
-    relevance_score: Optional[int] = Field(None, ge=1, le=10, description="Goal relevance (1-10)")
-    goal_alignment: Optional[str] = Field(None, description="How this aligns with the goal")
-    goal_priority: Optional[str] = Field(None, description="Priority level: high/medium/low")
-
 
 class ProcessTextResponse(BaseModel):
     """Response model for text processing"""
-    recommendations: list[RecommendationResponse] = Field(..., description="List of 4 recommendations")
+    recommendations: list[RecommendationResponse] = Field(..., description="List of 3 recommendations")
     similar_main_category: str | None = Field(None, description="Most similar existing main category")
     similar_sub_category: str | None = Field(None, description="Most similar existing sub-category")
     similarity_score: float | None = Field(None, description="Similarity score if match found")
     goal_provided: bool = Field(..., description="Whether a learning goal was provided")
-    goal_summary: Optional[str] = Field(None, description="Summary of goal relevance analysis")
+    goal_relevance_score: Optional[int] = Field(None, ge=1, le=10, description="Overall goal relevance score (1-10)")
+    goal_relevance_explanation: Optional[str] = Field(None, description="Brief explanation of the goal relevance score")
     status: str = Field("success", description="Request status")
 
 

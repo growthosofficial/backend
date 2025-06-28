@@ -1,8 +1,202 @@
 import openai
 import json
+import pickle
+import os
 from typing import List, Dict, Optional
 from config.settings import settings
 from utils.category_mapping import get_all_subject_categories, get_subject_categories_prompt_text, validate_subject_category, get_subject_category_fallback
+from core.similarity import SSC
+
+# Cache for main category embeddings to avoid recalculating
+_MAIN_CATEGORY_EMBEDDINGS_CACHE = {}
+_EMBEDDINGS_CACHE_FILE = "main_category_embeddings.pkl"
+
+def _ensure_string(value):
+    """Ensure a value is a string, converting lists to space-separated strings."""
+    if isinstance(value, list):
+        return ' '.join(str(item) for item in value)
+    elif isinstance(value, (str, int, float)):
+        return str(value)
+    elif value is None:
+        return ""
+    else:
+        return str(value)
+
+def precompute_main_category_embeddings():
+    """
+    Pre-compute and save embeddings for all main categories
+    This should be run once during setup/deployment
+    """
+    from core.embeddings import get_embedding
+    main_categories = get_all_subject_categories()
+    
+    print("🔄 Pre-computing main category embeddings...")
+    embeddings = {}
+    
+    for i, category in enumerate(main_categories, 1):
+        print(f"  Computing embedding {i}/{len(main_categories)}: {category}")
+        embeddings[category] = get_embedding(category)
+    
+    # Save to file
+    with open(_EMBEDDINGS_CACHE_FILE, 'wb') as f:
+        pickle.dump(embeddings, f)
+    
+    print(f"✅ Saved embeddings for {len(main_categories)} main categories to {_EMBEDDINGS_CACHE_FILE}")
+    return embeddings
+
+def _get_main_category_embeddings():
+    """
+    Get embeddings for all main categories, using cache for efficiency
+    OPTIMIZED: Loads from pre-computed file if available
+    """
+    global _MAIN_CATEGORY_EMBEDDINGS_CACHE
+    
+    if not _MAIN_CATEGORY_EMBEDDINGS_CACHE:
+        # Try to load from pre-computed file first
+        if os.path.exists(_EMBEDDINGS_CACHE_FILE):
+            try:
+                print(f"📂 Loading pre-computed embeddings from {_EMBEDDINGS_CACHE_FILE}...")
+                with open(_EMBEDDINGS_CACHE_FILE, 'rb') as f:
+                    _MAIN_CATEGORY_EMBEDDINGS_CACHE = pickle.load(f)
+                print(f"✅ Loaded {len(_MAIN_CATEGORY_EMBEDDINGS_CACHE)} cached embeddings")
+            except Exception as e:
+                print(f"⚠️ Failed to load cached embeddings: {e}")
+                print("🔄 Computing embeddings on first use...")
+                _MAIN_CATEGORY_EMBEDDINGS_CACHE = precompute_main_category_embeddings()
+        else:
+            print("🔄 No pre-computed embeddings found. Computing on first use...")
+            _MAIN_CATEGORY_EMBEDDINGS_CACHE = precompute_main_category_embeddings()
+    
+    return _MAIN_CATEGORY_EMBEDDINGS_CACHE
+
+def _map_subcategory_to_main_category_fast(sub_category: str) -> str:
+    """
+    Fast keyword-based mapping for immediate results
+    Used as fallback while embeddings are being computed
+    """
+    if not sub_category:
+        return "General Studies"
+    
+    sub_lower = sub_category.lower()
+    
+    # Quick keyword matching (much faster than embeddings)
+    keyword_mapping = {
+        # STEM
+        'math': 'Mathematics', 'algebra': 'Mathematics', 'calculus': 'Mathematics', 'geometry': 'Mathematics',
+        'physics': 'Physics', 'quantum': 'Physics', 'mechanics': 'Physics', 'relativity': 'Physics',
+        'chemistry': 'Chemistry', 'chemical': 'Chemistry', 'molecule': 'Chemistry', 'reaction': 'Chemistry',
+        'biology': 'Biology', 'biological': 'Biology', 'cell': 'Biology', 'genetic': 'Biology', 'organism': 'Biology',
+        'computer': 'Computer Science', 'programming': 'Computer Science', 'software': 'Computer Science', 'algorithm': 'Computer Science',
+        'engineering': 'Engineering', 'mechanical': 'Engineering', 'electrical': 'Engineering', 'civil': 'Engineering',
+        'medicine': 'Medicine', 'medical': 'Medicine', 'health': 'Medicine', 'clinical': 'Medicine', 'treatment': 'Medicine',
+        'environment': 'Environmental Science', 'climate': 'Environmental Science', 'ecology': 'Environmental Science',
+        'astronomy': 'Astronomy', 'space': 'Astronomy', 'planet': 'Astronomy', 'star': 'Astronomy',
+        'geology': 'Geology', 'earth': 'Geology', 'rock': 'Geology', 'mineral': 'Geology',
+        
+        # Social Sciences
+        'psychology': 'Psychology', 'psychological': 'Psychology', 'behavior': 'Psychology', 'mental': 'Psychology',
+        'sociology': 'Sociology', 'social': 'Sociology', 'society': 'Sociology', 'culture': 'Sociology',
+        'anthropology': 'Anthropology', 'ethnography': 'Anthropology', 'cultural': 'Anthropology',
+        'politics': 'Political Science', 'political': 'Political Science', 'government': 'Political Science',
+        'economics': 'Economics', 'economic': 'Economics', 'economy': 'Economics', 'market': 'Economics',
+        'geography': 'Geography', 'geographical': 'Geography', 'map': 'Geography', 'location': 'Geography',
+        'language': 'Linguistics', 'linguistic': 'Linguistics', 'grammar': 'Linguistics', 'syntax': 'Linguistics',
+        'archaeology': 'Archaeology', 'artifact': 'Archaeology', 'excavation': 'Archaeology',
+        
+        # Humanities
+        'history': 'History', 'historical': 'History', 'past': 'History', 'ancient': 'History',
+        'philosophy': 'Philosophy', 'philosophical': 'Philosophy', 'ethics': 'Philosophy', 'logic': 'Philosophy',
+        'literature': 'Literature', 'literary': 'Literature', 'novel': 'Literature', 'poetry': 'Literature',
+        'religion': 'Religious Studies', 'religious': 'Religious Studies', 'theology': 'Religious Studies',
+        'art': 'Art History', 'artistic': 'Art History', 'painting': 'Art History', 'sculpture': 'Art History',
+        'music': 'Music Theory', 'musical': 'Music Theory', 'composition': 'Music Theory', 'melody': 'Music Theory',
+        'theater': 'Theater Arts', 'drama': 'Theater Arts', 'performance': 'Theater Arts', 'acting': 'Theater Arts',
+        
+        # Applied & Professional
+        'business': 'Business Administration', 'management': 'Business Administration', 'strategy': 'Business Administration',
+        'law': 'Law', 'legal': 'Law', 'court': 'Law', 'justice': 'Law',
+        'education': 'Education', 'teaching': 'Education', 'learning': 'Education', 'pedagogy': 'Education',
+        'communication': 'Communications', 'media': 'Communications', 'journalism': 'Communications',
+        'architecture': 'Architecture', 'architectural': 'Architecture', 'building': 'Architecture',
+        'agriculture': 'Agriculture', 'farming': 'Agriculture', 'crop': 'Agriculture',
+        'nutrition': 'Nutrition', 'diet': 'Nutrition', 'food': 'Nutrition',
+        
+        # Arts & Creative
+        'visual': 'Visual Arts', 'graphic': 'Visual Arts', 'design': 'Visual Arts', 'illustration': 'Visual Arts',
+        'writing': 'Creative Writing', 'creative': 'Creative Writing', 'story': 'Creative Writing', 'narrative': 'Creative Writing',
+        'film': 'Film Studies', 'movie': 'Film Studies', 'cinema': 'Film Studies', 'video': 'Film Studies',
+        'photography': 'Photography', 'photo': 'Photography', 'camera': 'Photography',
+        
+        # Health & Physical
+        'public health': 'Public Health', 'epidemiology': 'Public Health',
+        'exercise': 'Physical Education', 'fitness': 'Physical Education', 'sport': 'Physical Education',
+        'therapy': 'Therapy & Rehabilitation', 'rehabilitation': 'Therapy & Rehabilitation',
+        
+        # Modern/Interdisciplinary
+        'data': 'Data Science', 'analytics': 'Data Science', 'big data': 'Data Science',
+        'security': 'Cybersecurity', 'cyber': 'Cybersecurity', 'encryption': 'Cybersecurity',
+        'biotechnology': 'Biotechnology', 'biotech': 'Biotechnology',
+        'cognitive': 'Cognitive Science', 'neuroscience': 'Cognitive Science', 'brain': 'Cognitive Science',
+        'international': 'International Studies', 'global': 'International Studies',
+        'gender': 'Gender Studies', 'feminist': 'Gender Studies',
+        'urban': 'Urban Planning', 'city planning': 'Urban Planning'
+    }
+    
+    # Check for exact matches first
+    for keyword, category in keyword_mapping.items():
+        if keyword in sub_lower:
+            return category
+    
+    return "General Studies"
+
+def _map_subcategory_to_main_category(sub_category: str, use_fast_fallback: bool = True) -> str:
+    """
+    Map a sub-category to the most semantically similar main category using embeddings
+    OPTIMIZED: Uses cached main category embeddings for efficiency
+    FALLBACK: Uses fast keyword matching if embeddings not available
+    """
+    if not sub_category:
+        return "General Studies"
+    
+    # Try to get cached embeddings first
+    try:
+        main_category_embeddings = _get_main_category_embeddings()
+        
+        # If we have embeddings, use semantic similarity
+        if main_category_embeddings:
+            # Get embedding for the sub-category
+            from core.embeddings import get_embedding
+            sub_category_embedding = get_embedding(sub_category)
+            
+            best_match = "General Studies"
+            highest_similarity = 0.0
+            
+            # Calculate cosine similarity
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            emb1 = np.array(sub_category_embedding).reshape(1, -1)
+            
+            # Compare with each main category
+            for main_cat, main_cat_embedding in main_category_embeddings.items():
+                emb2 = np.array(main_cat_embedding).reshape(1, -1)
+                similarity = cosine_similarity(emb1, emb2)[0][0]
+                
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    best_match = main_cat
+            
+            return best_match
+    
+    except Exception as e:
+        print(f"⚠️ Semantic mapping failed: {e}")
+    
+    # Fallback to fast keyword matching
+    if use_fast_fallback:
+        print("🔄 Using fast keyword-based fallback mapping...")
+        return _map_subcategory_to_main_category_fast(sub_category)
+    
+    return "General Studies"
 
 def call_azure_openai_llm(prompt: str) -> str:
     """
@@ -29,38 +223,32 @@ def call_azure_openai_llm(prompt: str) -> str:
     response = client.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
         messages=[
-            {"role": "system", "content": """You are a Goal-Oriented Semantic Knowledge Organizer.
+            {"role": "system", "content": """You are a Knowledge Organization Strategist. Your role is to analyze input text and generate 3 different strategic approaches for organizing it.
 
-Your role is to interpret new knowledge inputs and determine their optimal structural placement by comparing semantic similarity, generating actionable reorganization proposals, and enhancing categorization through MECE-based reasoning. You excel at goal-aware knowledge curation that aligns learning materials with specific objectives.
+CRITICAL: You generate INSTRUCTIONS for a second LLM that will actually transform the input text. Your instructions must be:
+- Specific and actionable
+- Clear step-by-step commands
+- Detailed enough for another LLM to execute precisely
+- Focused on text transformation, restructuring, and content organization
 
-You interpret every task through these core principles:
-- Structure reveals meaning
-- Similarity invites nuance  
-- Clarity supports reuse
-- Coherence improves recall
-- Categories evolve with context
-- Goals shape relevance
-
-You draw expertise from:
-- Ontology Design
-- Semantic Search
-- Content Strategy
-- Information Architecture
-- Learning Sciences
-- Goal-Oriented Knowledge Management
+You do NOT transform the text yourself - you create detailed instructions for how another LLM should transform it.
 
 Your communication style is methodical, explanatory, and system-aware. You avoid ambiguity, vague tags, mechanical merging, rigid taxonomy, content dilution, and goal-irrelevant recommendations."""},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.7,
-        max_tokens=3500  # Increased for detailed responses
+        temperature=0.1,
+        max_tokens=1000 # Reduced for faster responses
     )
     
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    if content is None:
+        return ""
+    return content
 
-def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Optional[str] = None, llm_type: str = "azure_openai") -> List[Dict]:
+def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Optional[str] = None, llm_type: str = "azure_openai") -> Dict:
     """
-    Generate 4 different recommendations using Azure OpenAI with goal-based semantic analysis
+    Generate 3 different recommendations using Azure OpenAI with goal-based semantic analysis
+    OPTIMIZED: LLM only generates sub-categories, main categories are mapped via semantic similarity
     
     Args:
         input_text: New text input from user
@@ -69,7 +257,7 @@ def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Option
         llm_type: Type of LLM to use (only "azure_openai" supported)
         
     Returns:
-        List of 4 recommendation dictionaries with goal-based relevance analysis
+        Dictionary with goal_relevance_score and recommendations
     """
     if llm_type != "azure_openai":
         raise ValueError("Only 'azure_openai' is supported for llm_type")
@@ -78,301 +266,164 @@ def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Option
     context_sections = []
     
     # Input text analysis
-    context_sections.append(f"INPUT TEXT (New Knowledge):\n{input_text}\n")
+    context_sections.append(f"INPUT TEXT:\n{input_text}\n")
     
     # Goal context if provided
     if goal:
-        context_sections.append(f"LEARNING GOAL:\n{goal}\n")
-        context_sections.append("🎯 GOAL-RELEVANCE ANALYSIS REQUIRED for Options 1 & 2\n")
+        context_sections.append(f"LEARNING GOAL: {goal}\n")
     
     # Existing knowledge context
     if existing_knowledge:
         similarity_score = existing_knowledge.get('similarity_score', 0)
-        context_sections.append(f"EXISTING KNOWLEDGE (Similarity: {similarity_score:.3f}):")
-        context_sections.append(f"Main Category: {existing_knowledge.get('main_category', 'Unknown')}")
-        context_sections.append(f"Sub-Category: {existing_knowledge.get('sub_category', 'Unknown')}")
-        context_sections.append(f"Content Preview: {existing_knowledge.get('content', '')[:300]}...")
+        context_sections.append(f"SIMILAR EXISTING KNOWLEDGE (Score: {similarity_score:.3f}):")
+        context_sections.append(f"Category: {existing_knowledge.get('main_category', 'Unknown')} > {existing_knowledge.get('sub_category', 'Unknown')}")
+        context_sections.append(f"Content: {existing_knowledge.get('content', '')[:200]}...")
         context_sections.append("")
     else:
-        context_sections.append("EXISTING KNOWLEDGE: No similar content found (semantic distance > threshold)\n")
-    
-    # Academic categories context
-    categories_text = get_subject_categories_prompt_text()
-    context_sections.append(categories_text)
+        context_sections.append("SIMILAR EXISTING KNOWLEDGE: None found\n")
     
     # Construct the enhanced semantic prompt
     goal_instructions = ""
     goal_fields_example = ""
     if goal:
         goal_instructions = f"""
-##### GOAL-ORIENTED ANALYSIS (Required for Options 1 & 2):
+GOAL: "{goal}"
 
-For recommendations 1 and 2, you MUST perform goal-relevance analysis:
-- Assess how this knowledge supports achieving: "{goal}"
-- Assign relevance_score (1-10) based on direct utility toward the goal
-- Explain goal_alignment: WHY this knowledge matters for the goal
-- Determine goal_priority (high/medium/low) for learning sequence
-- Consider knowledge gaps, prerequisite concepts, and practical applications
-- Evaluate if this knowledge accelerates, supports, or tangentially relates to goal achievement
+For options 1 & 2:
+1. Evaluate input relevance to goal (input text relevance to goal should be the same for both options 1 and 2)
+2. Perform semantic search for similar knowledge
+3. Add ONLY goal-relevant content
+4. Include: relevance_score (1-10), goal_alignment, goal_priority (high/medium/low)
 
-RECOMMENDATION STRATEGY:
-- Options 1 & 2: Goal-optimized approaches with relevance scoring
-- Options 3 & 4: Semantic-optimal approaches without goal bias
+Option 3: Regular semantic approach (no goal bias)
 """
     else:
         goal_instructions = """
-##### STANDARD SEMANTIC ANALYSIS:
-No learning goal provided. All 4 recommendations will use semantic-optimal organization principles.
+No goal provided. All 3 options use semantic organization.
 """
 
-    prompt = f"""##### CONTEXT:
-You are a Goal-Oriented Semantic Knowledge Organizer analyzing new knowledge input.
+    prompt = f"""Analyze this knowledge input and provide 3 recommendations for optimal organization.
+
+INPUT: {input_text}
 
 {chr(10).join(context_sections)}
 
 {goal_instructions}
 
-##### INSTRUCTIONS:
+INSTRUCTIONS:
+1. First, evaluate the input's relevance to the goal (if provided) and assign a goal_relevance_score (1-10)
+2. Provide exactly 3 distinct recommendations
+3. Preserve all content detail - never summarize or paraphrase
+4. Use semantic relationships with existing knowledge
+5. Generate specific, descriptive sub-categories (e.g., "quantum mechanics applications", "Renaissance art techniques", "startup financial modeling")
+6. Generate 3-4 meaningful tags per recommendation (tags should be related to the content and category)
+7. CRITICAL: Write instructions for transforming the input text into updated text
 
-1. **Examine the INPUT TEXT** as a new piece of information requiring optimal structural placement.
+OUTPUT FORMAT (MUST BE VALID JSON):
+{{
+  "goal_relevance_score": 1-10,
+  "goal_relevance_explanation": "Brief explanation of why this score was assigned",
+  "recommendations": [
+    {{
+      "option_number": 1,
+      "change": "2-3 sentences explaining this approach",
+      "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
+      "tags": ["tag1", "tag2", "tag3"],
+      "action_type": "merge/update/create_new"{goal_fields_example}
+    }},
+    {{
+      "option_number": 2,
+      "change": "2-3 sentences explaining an alternative approach",
+      "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
+      "tags": ["tag1", "tag2", "tag3"],
+      "action_type": "merge/update/create_new"{goal_fields_example}
+    }},
+    {{
+      "option_number": 3,
+      "change": "2-3 sentences explaining regular semantic approach.",
+      "instructions": "Transform the input text by: [specific text transformation steps like restructure paragraphs, add headings, modify language style, combine related content, etc.]. Focus only on text transformation.",
+      "sub_category": "specific sub-topic (e.g., quantum mechanics applications, Renaissance art techniques, startup financial modeling)",
+      "tags": ["tag1", "tag2", "tag3"],
+      "action_type": "merge/update/create_new"
+    }}
+  ]
+}}
 
-2. **Analyze semantic relationships** with EXISTING KNOWLEDGE using the similarity score. Consider whether to merge, append, restructure, or create new categories.
-
-3. **Provide exactly 4 distinct recommendations** for handling this knowledge:
-   - **Option 1**: {"Goal-optimized merge/update approach" if goal else "Semantic merge/update approach"}
-   - **Option 2**: {"Goal-optimized replace/restructure approach" if goal else "Semantic replace/restructure approach"}  
-   - **Option 3**: Comprehensive semantic organization (goal-agnostic)
-   - **Option 4**: Specialized categorization approach (goal-agnostic)
-
-4. **Ensure meaningful distinction** between all recommendations. Each must offer different structural benefits and trade-offs.
-
-5. **Preserve content integrity**: Never summarize, paraphrase, or reduce detail. Maintain all nuance and specificity from the input text.
-
-6. **Smart structural decisions**:
-   - Only merge when semantic coherence is maintained
-   - Create new sections/categories when content is sufficiently distinct
-   - Suggest appropriate action_type: merge/update/create_new
-   - Ensure logical information architecture
-
-7. **Generate calibrated tags** (3-5 per recommendation):
-   - Accurately describe subject matter (e.g., "machine-learning", "cognitive-psychology")
-   - Use lowercase, hyphenated format for multi-word tags
-   - Optimize for categorization and semantic search
-   - Avoid generic terms like "new", "updated", "content"
-
-8. **Academic category compliance**: Select main_category from the provided academic subjects list (exact match required).
-
-##### OUTPUT FORMAT:
-
-Respond with valid JSON in this exact structure:
-
-[
-  {{
-    "option_number": 1,
-    "change": "3-5 sentences explaining the recommended approach, rationale, and structural impact. Focus on goal-relevance and semantic optimization.",
-    "updated_text": "Complete updated/merged/new content preserving all detail and nuance",
-    "main_category": "EXACT academic subject name from categories list",
-    "sub_category": "specific descriptive sub-topic within that academic subject",
-    "tags": ["tag1", "tag2", "tag3", "tag4"],
-    "preview": "First 100 characters of updated content...",
-    "action_type": "merge/update/create_new",
-    "reasoning": "Detailed explanation of why this structural approach optimizes knowledge organization",{goal_fields_example}
-    "semantic_coherence": "high/medium/low - assessment of how well this maintains semantic relationships"
-  }},
-  {{
-    "option_number": 2,
-    "change": "3-5 sentences explaining the second approach with different structural trade-offs and benefits.",
-    "updated_text": "Complete updated/restructured/new content maintaining full detail",
-    "main_category": "EXACT academic subject name from categories list",
-    "sub_category": "specific descriptive sub-topic within that academic subject",
-    "tags": ["tag1", "tag2", "tag3", "tag4"],
-    "preview": "First 100 characters of updated content...",
-    "action_type": "merge/update/create_new",
-    "reasoning": "Explanation of alternative structural benefits and organization logic",{goal_fields_example}
-    "semantic_coherence": "high/medium/low - coherence assessment for this approach"
-  }},
-  {{
-    "option_number": 3,
-    "change": "3-5 sentences explaining comprehensive semantic organization without goal bias.",
-    "updated_text": "Complete content organized for optimal semantic relationships",
-    "main_category": "EXACT academic subject name from categories list",
-    "sub_category": "specific descriptive sub-topic within that academic subject",
-    "tags": ["tag1", "tag2", "tag3", "tag4"],
-    "preview": "First 100 characters of updated content...",
-    "action_type": "merge/update/create_new",
-    "reasoning": "Pure semantic optimization rationale",
-    "semantic_coherence": "high/medium/low - assessment of semantic relationship quality"
-  }},
-  {{
-    "option_number": 4,
-    "change": "3-5 sentences explaining specialized categorization approach with unique structural benefits.",
-    "updated_text": "Complete content organized with specialized categorical focus",
-    "main_category": "EXACT academic subject name from categories list",
-    "sub_category": "specific descriptive sub-topic within that academic subject",
-    "tags": ["tag1", "tag2", "tag3", "tag4"],
-    "preview": "First 100 characters of updated content...",
-    "action_type": "merge/update/create_new",
-    "reasoning": "Specialized organization benefits and use case rationale",
-    "semantic_coherence": "high/medium/low - coherence assessment for specialized approach"
-  }}
-]
-
-##### CRITICAL REQUIREMENTS:
-
-- **Academic Compliance**: main_category must exactly match academic subjects list
-- **Content Preservation**: Never reduce detail, summarize, or paraphrase input content
-- **Structural Integrity**: Ensure logical information architecture and semantic coherence
-- **Goal Fields**: Include relevance_score, goal_alignment, goal_priority ONLY in options 1 & 2 when goal provided
-- **Tag Quality**: Generate meaningful, searchable tags avoiding generic terms
-- **JSON Validity**: Ensure proper formatting and escaped characters
-- **Distinct Approaches**: Each recommendation must offer meaningfully different structural benefits"""
+REQUIREMENTS:
+- Generate specific, descriptive sub-categories (main categories will be automatically mapped)
+- Never reduce content detail
+- Instructions should focus ONLY on text transformation (restructure, add sections, modify language, combine content)
+- Do NOT include semantic search, external operations, or citations in instructions
+- Include goal fields (relevance_score, goal_alignment, goal_priority) ONLY in options 1 & 2 when goal provided
+- Ensure valid JSON formatting"""
 
     try:
         # Get response from Azure OpenAI
         llm_response = call_azure_openai_llm(prompt)
         
+        # Clean the response - remove markdown code blocks if present
+        cleaned_response = llm_response.strip()
+        if cleaned_response.startswith('```json'):
+            cleaned_response = cleaned_response[7:]  # Remove ```json
+        if cleaned_response.startswith('```'):
+            cleaned_response = cleaned_response[3:]   # Remove ```
+        if cleaned_response.endswith('```'):
+            cleaned_response = cleaned_response[:-3]  # Remove trailing ```
+        cleaned_response = cleaned_response.strip()
+        
         # Parse the JSON response
-        recommendations = json.loads(llm_response)
+        response_data = json.loads(cleaned_response)
         
-        # Validate and enhance each recommendation
-        enhanced_recommendations = []
+        # Handle both new nested structure and old list format
+        if isinstance(response_data, dict):
+            # New format with goal_relevance_score and recommendations
+            goal_relevance_score = response_data.get('goal_relevance_score', 5)
+            goal_relevance_explanation = response_data.get('goal_relevance_explanation', '')
+            recommendations = response_data.get('recommendations', [])
+        else:
+            # Old format - direct list of recommendations
+            goal_relevance_score = 5
+            goal_relevance_explanation = 'No goal relevance analysis available'
+            recommendations = response_data if isinstance(response_data, list) else []
+        
+        # OPTIMIZATION: Map sub-categories to main categories using semantic similarity
         for rec in recommendations:
-            main_category = rec.get('main_category', '')
-            sub_category = rec.get('sub_category', 'general knowledge')
-            
-            # Validate main category (academic subject)
-            if not validate_subject_category(main_category):
-                print(f"⚠️  Warning: Invalid academic subject '{main_category}', using fallback")
-                main_category = get_subject_category_fallback(sub_category)
-            
-            enhanced_rec = {
-                'option_number': rec.get('option_number', len(enhanced_recommendations) + 1),
-                'change': rec.get('change', 'Semantic knowledge organization'),
-                'updated_text': rec.get('updated_text', input_text),
-                'main_category': main_category,
-                'sub_category': sub_category,
-                'tags': rec.get('tags', []),
-                'preview': rec.get('preview', rec.get('updated_text', '')[:100] + '...'),
-                'action_type': rec.get('action_type', 'create_new'),
-                'reasoning': rec.get('reasoning', 'Semantic optimization approach'),
-                'semantic_coherence': rec.get('semantic_coherence', 'medium')
-            }
-            
-            # Add goal-specific fields only for options 1 & 2 when goal is provided
-            if goal and rec.get('option_number', 0) in [1, 2]:
-                enhanced_rec.update({
-                    'relevance_score': rec.get('relevance_score', 5),
-                    'goal_alignment': rec.get('goal_alignment', 'General knowledge contribution to learning goal'),
-                    'goal_priority': rec.get('goal_priority', 'medium'),
-                    'is_goal_aware': True
-                })
-            else:
-                enhanced_rec['is_goal_aware'] = False
-            
-            enhanced_recommendations.append(enhanced_rec)
+            sub_category = rec.get('sub_category', 'General')
+            # Map sub-category to main category using semantic similarity
+            main_category = _map_subcategory_to_main_category(sub_category)
+            rec['main_category'] = main_category
         
-        # Ensure we have exactly 4 recommendations
-        while len(enhanced_recommendations) < 4:
-            enhanced_recommendations.append(create_fallback_recommendation(
-                input_text, existing_knowledge, len(enhanced_recommendations) + 1, goal
-            ))
-        
-        print(f"✅ Generated {len(enhanced_recommendations)} semantic knowledge recommendations")
+        # Add goal-specific fields to options 1 & 2 when goal is provided
         if goal:
-            goal_aware_count = sum(1 for rec in enhanced_recommendations if rec.get('is_goal_aware'))
-            print(f"🎯 Goal-aligned recommendations: {goal_aware_count}/4")
+            for rec in recommendations:
+                if rec.get('option_number', 0) in [1, 2]:
+                    rec.update({
+                        'relevance_score': rec.get('relevance_score', 5),
+                        'goal_alignment': _ensure_string(rec.get('goal_alignment', 'General knowledge contribution to learning goal')),
+                        'goal_priority': rec.get('goal_priority', 'medium'),
+                        'is_goal_aware': True
+                    })
+                else:
+                    rec['is_goal_aware'] = False
         
-        # Log semantic coherence assessment
-        coherence_scores = [rec.get('semantic_coherence', 'medium') for rec in enhanced_recommendations]
-        high_coherence = coherence_scores.count('high')
-        print(f"🔗 High semantic coherence: {high_coherence}/4 recommendations")
+        print(f"✅ Generated {len(recommendations)} semantic knowledge recommendations")
+        if goal:
+            goal_aware_count = sum(1 for rec in recommendations if rec.get('is_goal_aware'))
+            print(f"🎯 Goal-aligned recommendations: {goal_aware_count}/3")
+            print(f"🎯 Overall goal relevance score: {goal_relevance_score}/10")
         
-        return enhanced_recommendations
+        return {
+            "goal_relevance_score": goal_relevance_score,
+            "goal_relevance_explanation": goal_relevance_explanation,
+            "recommendations": recommendations
+        }
         
     except json.JSONDecodeError as e:
         print(f"❌ Error parsing LLM response as JSON: {e}")
-        print(f"Raw response: {llm_response[:300]}...")
-        return create_fallback_recommendations(input_text, existing_knowledge, goal)
+        print(f"Raw response: {llm_response}")
+        return {}
     except Exception as e:
         print(f"❌ Error calling Azure OpenAI: {e}")
-        return create_fallback_recommendations(input_text, existing_knowledge, goal)
-
-def create_fallback_recommendation(input_text: str, existing_knowledge: Optional[Dict], option_number: int, goal: Optional[str] = None) -> Dict:
-    """
-    Create a single fallback recommendation with semantic awareness
-    
-    Args:
-        input_text: The input text
-        existing_knowledge: Existing knowledge item if any
-        option_number: The recommendation number
-        goal: Learning goal if provided
-        
-    Returns:
-        Single fallback recommendation dictionary
-    """
-    main_category = get_subject_category_fallback(input_text)
-    sub_category = f'general knowledge {option_number}'
-    
-    # Determine action type based on semantic similarity
-    if existing_knowledge and existing_knowledge.get('similarity_score', 0) > 0.85:
-        action_type = 'merge' if option_number % 2 == 1 else 'update'
-    elif existing_knowledge and existing_knowledge.get('similarity_score', 0) > 0.7:
-        action_type = 'update'
-    else:
-        action_type = 'create_new'
-    
-    # Generate semantic-aware tags
-    basic_tags = ['knowledge-management', f'option-{option_number}']
-    if goal:
-        basic_tags.append('goal-oriented')
-    
-    recommendation = {
-        'option_number': option_number,
-        'change': f'Fallback semantic organization approach {option_number}. This recommendation provides basic knowledge structuring while maintaining content integrity and semantic relationships.',
-        'updated_text': input_text,
-        'main_category': main_category,
-        'sub_category': sub_category,
-        'tags': basic_tags,
-        'preview': input_text[:100] + '...' if len(input_text) > 100 else input_text,
-        'action_type': action_type,
-        'reasoning': f'Fallback recommendation applying semantic organization principles with {action_type} strategy',
-        'semantic_coherence': 'medium',
-        'is_goal_aware': False
-    }
-    
-    # Add goal-specific fields for options 1 & 2 when goal is provided
-    if goal and option_number in [1, 2]:
-        recommendation.update({
-            'relevance_score': 5,  # Neutral score for fallback
-            'goal_alignment': f'Fallback assessment: Knowledge may contribute to goal "{goal}" but requires manual evaluation',
-            'goal_priority': 'medium',
-            'is_goal_aware': True
-        })
-    
-    return recommendation
-
-def create_fallback_recommendations(input_text: str, existing_knowledge: Optional[Dict], goal: Optional[str] = None) -> List[Dict]:
-    """
-    Create 4 fallback recommendations with semantic organization principles
-    
-    Args:
-        input_text: The input text
-        existing_knowledge: Existing knowledge item if any
-        goal: Learning goal if provided
-        
-    Returns:
-        List of 4 fallback recommendations
-    """
-    recommendations = []
-    
-    for i in range(1, 5):
-        recommendation = create_fallback_recommendation(input_text, existing_knowledge, i, goal)
-        recommendations.append(recommendation)
-    
-    main_category = get_subject_category_fallback(input_text)
-    print(f"⚠️  Using semantic fallback recommendations with academic subject: {main_category}")
-    if goal:
-        print(f"🎯 Goal-aware fallback recommendations: 2/4 (options 1 & 2)")
-    print(f"🔗 Semantic organization: All recommendations maintain content integrity")
-    
-    return recommendations
+        return {}
