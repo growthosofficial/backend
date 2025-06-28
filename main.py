@@ -97,7 +97,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173", 
         "http://localhost:3003",
-        "https://growthos-one.vercel.app" 
+        "https://growthos-one.vercel.app",
+        "https://growthy-xlef.vercel.app" 
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
