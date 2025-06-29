@@ -37,12 +37,14 @@ class MultipleChoiceQuestion(BaseModel):
         return v
 
 class MultipleChoiceQuestionResponse(BaseModel):
-    """Public response model for multiple choice questions (without answers)"""
-    question_id: int = Field(..., description="Database ID of the question")
-    question_text: str = Field(..., description="The question text")
-    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-    selected_answer_index: int | None = Field(None, description="Index of selected option (0-3)")
+    """Response model for multiple choice questions"""
+    question_id: int
+    question_text: str
+    options: List[str]
+    knowledge_id: int
+    selected_answer_index: int = 0
+    main_category: str
+    sub_category: str
 
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""
@@ -73,21 +75,22 @@ class EvaluationResponse(BaseModel):
     """Response model for evaluation results"""
     question_text: str
     answer: str
-    score: float | None = None
+    score: Optional[float] = None  # Score is only for free text answers
     feedback: str
-    correct_points: List[str]
-    incorrect_points: List[str]
-    evaluation_id: int | None = None
+    correct_points: List[str] = []  # Only for free text answers
+    incorrect_points: List[str] = []  # Only for free text answers
+    evaluation_id: Optional[int] = None
     knowledge_id: int
     mastery: float
+    previous_mastery: float  # Add previous mastery level
     mastery_explanation: str
-    sample_answer: str | None = None
-    is_correct: bool | None = None
-    multiple_choice_question_id: int | None = None
+    sample_answer: Optional[str] = None  # Only for free text answers
+    is_correct: Optional[bool] = None  # Only for multiple choice
+    multiple_choice_question_id: Optional[int] = None  # Only for multiple choice
     # Multiple choice specific fields
-    options: List[str] | None = None
-    selected_index: int | None = None
-    correct_answer_index: int | None = None
+    options: Optional[List[str]] = None
+    selected_index: Optional[int] = None
+    correct_answer_index: Optional[int] = None
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -98,15 +101,17 @@ class BatchEvaluationResponse(BaseModel):
     evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
     total_evaluated: int = Field(..., description="Total number of answers evaluated")
 
-class EvaluationHistoryResponse(BaseModel):
-    """Response model for evaluation history"""
+class EvaluationGroupResponse(BaseModel):
+    """Response model for grouped evaluations"""
+    evaluation_group_id: int
     evaluations: List[EvaluationResponse]
-    knowledge_id: int
-    total_evaluations: int
-    average_score: float
-    current_mastery: float
+    created_at: datetime
+    mastery: float
     mastery_explanation: str
 
+class EvaluationHistoryResponse(BaseModel):
+    """Response model for evaluation history"""
+    evaluation_groups: List[EvaluationGroupResponse]
 
 # REQUEST MODELS (for processing only)
 
