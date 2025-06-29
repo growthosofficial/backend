@@ -99,7 +99,7 @@ app.add_middleware(
         "http://localhost:3003",
         "https://frontend-axc2vv97r-growthos-projects.vercel.app",
         "https://frontend-ruby-seven-45.vercel.app",
-        "https://frontend-bckh94c82-growthos-projects.vercel.app"
+        "https://frontend-bckh94c82-growthos-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
@@ -190,8 +190,7 @@ async def process_text(request: ProcessTextRequest):
             input_text=request.text, 
             existing_knowledge=most_similar, 
             goal=request.goal,  # Pass the goal parameter
-            llm_type="azure_openai",
-            similarity_threshold=request.threshold  # Pass the similarity threshold
+            llm_type="azure_openai"
         )
         recommendations_raw = llm_result.get("recommendations", [])
         goal_relevance_score = llm_result.get("goal_relevance_score", None)
