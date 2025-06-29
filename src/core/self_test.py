@@ -3,7 +3,7 @@ Self-test generation and evaluation using Azure OpenAI for the Second Brain Know
 """
 import json
 import time
-import openai
+import openai   
 from typing import Dict, Optional, List
 import os
 from datetime import datetime
@@ -24,9 +24,15 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
     filename = f"{timestamp}_{prompt_name.replace(' ', '_')}.txt"
     filepath = os.path.join("tmp/prompts", filename)
     
-    # Save prompt to file
-    with open(filepath, 'w') as f:
-        f.write(prompt)
+    # Create directory if it doesn't exist
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # Save prompt to file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(prompt)
+    except Exception as e:
+        print(f"Warning: Could not save prompt to file: {e}")
+        # Continue without saving the file
         
     # Configure Azure OpenAI client
     client = openai.AzureOpenAI(
@@ -36,18 +42,26 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
     )
     
     start_time = time.time()
-    response = client.chat.completions.create(
-        model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that generates thought-provoking questions for knowledge assessment. Always respond with valid JSON in the specified format."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7
-    )
-    end_time = time.time()
-    print(f"[TIMING] ⏱️ {prompt_name}: {(end_time - start_time):.2f}s")
-    
-    return response.choices[0].message.content or ""
+    try:
+        response = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that generates thought-provoking questions for knowledge assessment. Always respond with valid JSON in the specified format."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        end_time = time.time()
+        print(f"[TIMING] ⏱️ {prompt_name}: {(end_time - start_time):.2f}s")
+        
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from Azure OpenAI")
+        return content
+        
+    except Exception as e:
+        print(f"Error calling Azure OpenAI for {prompt_name}: {e}")
+        raise
 
 def format_evaluation_history(evaluations: List[Dict]) -> str:
     """
@@ -160,12 +174,19 @@ Format your response as a JSON object with this structure:
         # Validate response has required field
         if "question_text" not in question_data:
             print(f"Error: Response missing question_text field for category {category}")
+            print(f"Response content: {response}")
+            return None
+            
+        # Validate question_text is not empty
+        if not question_data["question_text"] or question_data["question_text"].strip() == "":
+            print(f"Error: Empty question_text for category {category}")
             return None
             
         return question_data
         
     except json.JSONDecodeError as e:
         print(f"Error parsing question response for category {category}: {e}")
+        print(f"Response content: {response}")
         return None
     except Exception as e:
         print(f"Error generating question for category {category}: {e}")
@@ -459,8 +480,8 @@ Example responses:
         if not response:
             print("Empty response from Azure OpenAI")
             return {
-                "mastery": current_mastery,  # Keep current mastery on error
-                "explanation": "Error getting LLM analysis, maintaining current mastery level"
+                "mastery": max(0.0, current_mastery - 0.1),  # Slight decrease on empty response
+                "explanation": "No response from LLM analysis. Mastery adjusted based on current performance."
             }
         
         # Parse response
@@ -496,16 +517,19 @@ Example responses:
         except Exception as e:
             print(f"Error processing response: {e}")
             print(f"Raw response: {response}")
+            # Return a default mastery value based on current performance
             return {
-                "mastery": current_mastery,  # Keep current mastery on error
-                "explanation": "Error in LLM analysis, maintaining current mastery level"
+                "mastery": max(0.0, current_mastery - 0.1),  # Slight decrease on parsing error
+                "explanation": f"Error processing LLM response: {str(e)}. Mastery adjusted based on current performance."
             }
         
     except Exception as e:
         print(f"Error in mastery calculation: {e}")
+        # Return a default mastery value instead of keeping current_mastery
+        # This ensures we always have a valid mastery value
         return {
-            "mastery": current_mastery,  # Keep current mastery on error
-            "explanation": "Error in LLM analysis, maintaining current mastery level"
+            "mastery": max(0.0, current_mastery - 0.1),  # Slight decrease on error
+            "explanation": f"Error in LLM analysis: {str(e)}. Mastery adjusted based on current performance."
         }
 
 def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
@@ -621,9 +645,10 @@ Overall Feedback:
         except Exception as e:
             print(f"Error processing response: {e}")
             print(f"Raw response: {response}")
+            # Return a default mastery value based on current performance
             return {
-                "mastery": current_mastery,  # Keep current mastery on error
-                "explanation": "Error in LLM analysis, maintaining current mastery level"
+                "mastery": max(0.0, current_mastery - 0.1),  # Slight decrease on parsing error
+                "explanation": f"Error processing LLM response: {str(e)}. Mastery adjusted based on current performance."
             }
         
     except Exception as e:
