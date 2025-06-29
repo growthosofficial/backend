@@ -418,6 +418,23 @@ class SupabaseManager:
             print(f"Error getting evaluations: {e}")
             return []
 
+    def get_evaluations_by_knowledge_ids(self, knowledge_ids: List[int]) -> List[Dict]:
+        """
+        Get evaluations by knowledge IDs
+        
+        Args:
+            knowledge_ids: List of knowledge IDs to retrieve
+        """
+        try:
+            result = self.supabase.table('evaluations')\
+                .select('*')\
+                .in_('knowledge_id', knowledge_ids)\
+                .execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting evaluations by knowledge IDs: {e}")
+            return []
+
     def create_multiple_choice_questions(self, questions: List[Dict]) -> List[Dict]:
         """
         Store multiple choice questions in batch

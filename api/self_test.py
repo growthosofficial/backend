@@ -164,35 +164,42 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
     """
     try:
         evaluations = []
+
+        knowledge_ids = [answer.knowledge_id for answer in request.answers]
+        knowledges = supabase_manager.load_knowledge_by_ids(knowledge_ids)
+        knowledge_map = {item['id']: item for item in knowledges}
+        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids(knowledge_ids)
+        knowledge_evaluations_map = {}
+
+        for evaluation in knowledge_evaluations:
+            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
+                knowledge_evaluations_map[evaluation['knowledge_id']] = []
+            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
         
         for answer_request in request.answers:
             knowledge_id = answer_request.knowledge_id
             
-            # Get knowledge item content and current mastery
-            knowledge_result = supabase_manager.supabase.table('knowledge_items')\
-                .select('content,mastery,main_category,sub_category')\
-                .eq('id', knowledge_id)\
-                .single()\
-                .execute()
-            
-            if not knowledge_result.data:
+            knowledge_result = knowledge_map.get(knowledge_id)
+            if not knowledge_result:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Knowledge item {knowledge_id} not found"
                 )
-            
-            knowledge_content = knowledge_result.data.get('content', '')
-            current_mastery = knowledge_result.data.get('mastery', 0.0)
-            
-            previous_evaluations = supabase_manager.get_evaluations(knowledge_id)
+
+            previous_evaluations = knowledge_evaluations_map.get(knowledge_id)
+            if not previous_evaluations:
+                previous_evaluations = []
+
+            knowledge_content = knowledge_result.get('content', '')
+            current_mastery = knowledge_result.get('mastery', 0.0)
             
             # Evaluate the answer
             evaluation = evaluate_free_text_answer(
                 question_text=answer_request.question_text,
                 answer=answer_request.answer,
                 knowledge_content=knowledge_content,
-                main_category=knowledge_result.data.get('main_category', 'Unknown'),
-                sub_category=knowledge_result.data.get('sub_category', 'Unknown')
+                main_category=knowledge_result.get('main_category', 'Unknown'),
+                sub_category=knowledge_result.get('sub_category', 'Unknown')
             )
             
             # Store evaluation in database
@@ -205,7 +212,8 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 "correct_points": evaluation['correct_points'],
                 "incorrect_points": evaluation['incorrect_points'],
                 "question_type": QuestionType.FREE_TEXT,
-                "sample_answer": evaluation.get('sample_answer')
+                "sample_answer": evaluation.get('sample_answer'),
+                "previous_mastery": current_mastery  # Store previous mastery
             }
             
             stored_eval = supabase_manager.create_evaluation(evaluation_data)
@@ -225,6 +233,9 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 previous_evaluations=previous_evaluations,
                 current_mastery=current_mastery
             )
+
+            if stored_eval:
+                previous_evaluations.append(stored_eval)
             
             # Update knowledge item mastery and explanation
             supabase_manager.update_mastery(
@@ -233,7 +244,10 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 mastery=mastery_result['mastery'],
                 mastery_explanation=mastery_result['explanation']
             )
-            
+
+            knowledge_map[knowledge_id]['mastery'] = mastery_result['mastery']
+            knowledge_map[knowledge_id]['mastery_explanation'] = mastery_result['explanation']
+
             # Create evaluation response
             evaluation_response = EvaluationResponse(
                 question_text=answer_request.question_text,
@@ -245,6 +259,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 evaluation_id=stored_eval['id'] if stored_eval else None,
                 knowledge_id=knowledge_id,
                 mastery=mastery_result['mastery'],
+                previous_mastery=current_mastery,
                 mastery_explanation=mastery_result['explanation'],
                 sample_answer=evaluation.get('sample_answer'),
                 is_correct=None,  # Not applicable for free text
@@ -508,7 +523,8 @@ Is Correct: {is_correct}
                     "multiple_choice_question_id": question['id'],
                     "mastery": mastery_result['mastery'],  # Add mastery from the calculation
                     "mastery_explanation": mastery_result['explanation'],  # Add mastery explanation,
-                    "correct_answer": question['options'][question['correct_answer_index']]
+                    "correct_answer": question['options'][question['correct_answer_index']],
+                    "previous_mastery": knowledge_item.get('mastery', 0.0)  # Store previous mastery
                 }
                 
                 stored_eval = supabase_manager.create_evaluation(evaluation_data)
@@ -524,6 +540,7 @@ Is Correct: {is_correct}
                     knowledge_id=knowledge_id,
                     evaluation_id=stored_eval['id'] if stored_eval else None,
                     mastery=mastery_result['mastery'],
+                    previous_mastery=knowledge_item.get('mastery', 0.0),  # Add previous mastery
                     mastery_explanation=mastery_result['explanation'],
                     sample_answer=None,  # No sample answer for multiple choice
                     is_correct=is_correct,
@@ -601,6 +618,7 @@ async def get_evaluations_by_knowledge_id(
                 evaluation_id=eval_data.get('id'),
                 knowledge_id=knowledge_id,
                 mastery=eval_data.get('mastery', 0.0),
+                previous_mastery=eval_data.get('previous_mastery', 0.0),  # Get previous mastery from evaluation record
                 mastery_explanation=eval_data.get('mastery_explanation', ''),
                 sample_answer=eval_data.get('sample_answer', None),
                 is_correct=eval_data.get('is_correct'),

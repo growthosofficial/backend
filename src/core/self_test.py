@@ -155,8 +155,6 @@ Example approach:
 - If there are technical details, focus on their practical implications rather than memorization
 - Better to have a focused question about key concepts than a broad question trying to cover everything
 
-IMPORTANT: You MUST generate exactly {num_questions} questions, no more and no less.
-
 Format your response as a JSON object with this structure:
 {{
     "questions": [
@@ -202,11 +200,6 @@ Format your response as a JSON object with this structure:
                 continue
                 
             questions_data.append(question)
-        
-        # Validate we got the requested number of questions
-        if len(questions_data) != num_questions:
-            print(f"Warning: Expected {num_questions} questions but got {len(questions_data)}")
-            # Continue anyway as we might still have some valid questions
         
         # Shuffle the questions before returning
         if questions_data:

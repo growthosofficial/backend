@@ -75,21 +75,22 @@ class EvaluationResponse(BaseModel):
     """Response model for evaluation results"""
     question_text: str
     answer: str
-    score: float | None = None
+    score: Optional[float] = None  # Score is only for free text answers
     feedback: str
-    correct_points: List[str]
-    incorrect_points: List[str]
-    evaluation_id: int | None = None
+    correct_points: List[str] = []  # Only for free text answers
+    incorrect_points: List[str] = []  # Only for free text answers
+    evaluation_id: Optional[int] = None
     knowledge_id: int
     mastery: float
+    previous_mastery: float  # Add previous mastery level
     mastery_explanation: str
-    sample_answer: str | None = None
-    is_correct: bool | None = None
-    multiple_choice_question_id: int | None = None
+    sample_answer: Optional[str] = None  # Only for free text answers
+    is_correct: Optional[bool] = None  # Only for multiple choice
+    multiple_choice_question_id: Optional[int] = None  # Only for multiple choice
     # Multiple choice specific fields
-    options: List[str] | None = None
-    selected_index: int | None = None
-    correct_answer_index: int | None = None
+    options: Optional[List[str]] = None
+    selected_index: Optional[int] = None
+    correct_answer_index: Optional[int] = None
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
