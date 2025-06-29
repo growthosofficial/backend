@@ -189,7 +189,8 @@ async def process_text(request: ProcessTextRequest):
             input_text=request.text, 
             existing_knowledge=most_similar, 
             goal=request.goal,  # Pass the goal parameter
-            llm_type="azure_openai"
+            llm_type="azure_openai",
+            similarity_threshold=request.threshold  # Pass the similarity threshold
         )
         recommendations_raw = llm_result.get("recommendations", [])
         goal_relevance_score = llm_result.get("goal_relevance_score", None)
