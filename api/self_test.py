@@ -21,7 +21,7 @@ from models import (
     BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
     MultipleChoiceQuestion, GenerateMultipleChoiceResponse, MultipleChoiceQuestionResponse,
     MultipleChoiceAnswerRequest, MultipleChoiceBatchAnswerRequest,
-    MultipleChoiceBatchEvaluationResponse, MultipleChoiceEvaluationDetail
+    MultipleChoiceBatchEvaluationResponse, MultipleChoiceEvaluationDetail, EvaluationGroupResponse
 )
 
 # Create router
@@ -592,7 +592,7 @@ async def get_evaluations_by_knowledge_id(
         limit: Maximum number of evaluations to return (1-100)
         
     Returns:
-        List of evaluations with scores, feedback, and mastery progression
+        List of evaluations grouped by evaluation_group_id
     """
     try:
         # Get knowledge item to verify it exists and get current mastery
@@ -603,18 +603,24 @@ async def get_evaluations_by_knowledge_id(
                 detail=f"Knowledge item {knowledge_id} not found"
             )
         
-        # Get evaluations for this knowledge item
+        # Get evaluations for this knowledge item with evaluation group info
         eval_result = supabase_manager.supabase.table('evaluations')\
-            .select('*')\
+            .select('*, evaluation_group_id')\
             .eq('knowledge_id', knowledge_id)\
             .order('created_at', desc=False)\
             .limit(limit)\
             .execute()
             
-        evaluations = []
+        # Group evaluations by evaluation_group_id
+        grouped_evaluations = {}
         total_score = 0
         
         for eval_data in eval_result.data:
+            group_id = eval_data.get('evaluation_group_id')
+            created_at = eval_data.get('created_at')
+            if not group_id:
+                continue  # Skip evaluations without a group
+                
             evaluation = EvaluationResponse(
                 question_text=eval_data.get('question_text', ''),
                 answer=eval_data.get('answer_text', ''),
@@ -625,28 +631,34 @@ async def get_evaluations_by_knowledge_id(
                 evaluation_id=eval_data.get('id'),
                 knowledge_id=knowledge_id,
                 mastery=eval_data.get('mastery', 0.0),
-                previous_mastery=eval_data.get('previous_mastery', 0.0),  # Get previous mastery from evaluation record
+                previous_mastery=eval_data.get('previous_mastery', 0.0),
                 mastery_explanation=eval_data.get('mastery_explanation', ''),
                 sample_answer=eval_data.get('sample_answer', None),
                 is_correct=eval_data.get('is_correct'),
                 multiple_choice_question_id=eval_data.get('multiple_choice_question_id')
             )
-            evaluations.append(evaluation)
-            # Only add score to total if it exists (free text answers)
+            
+            if group_id not in grouped_evaluations:
+                grouped_evaluations[group_id] = EvaluationGroupResponse(
+                    evaluation_group_id=group_id,
+                    created_at=created_at,
+                    evaluations=[],
+                    mastery=eval_data.get('mastery', 0.0),
+                    mastery_explanation=eval_data.get('mastery_explanation', '')
+                )
+            grouped_evaluations[group_id].evaluations.append(evaluation)
+            
             if evaluation.score is not None:
                 total_score += evaluation.score
         
-        # Calculate average score only for free text answers
-        scored_evaluations = [e for e in evaluations if e.score is not None]
-        average_score = total_score / len(scored_evaluations) if scored_evaluations else 0
-        
+        #sort by created_at
+        evaluation_groups = sorted(
+            grouped_evaluations.values(),
+            key=lambda x: x.created_at
+        )
+
         return EvaluationHistoryResponse(
-            evaluations=evaluations,
-            knowledge_id=knowledge_id,
-            total_evaluations=len(evaluations),
-            average_score=round(average_score, 2),
-            current_mastery=knowledge_item.get('mastery', 0.0),
-            mastery_explanation=knowledge_item.get('mastery_explanation', '')
+            evaluation_groups=evaluation_groups,
         )
         
     except Exception as e:

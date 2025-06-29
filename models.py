@@ -101,15 +101,17 @@ class BatchEvaluationResponse(BaseModel):
     evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
     total_evaluated: int = Field(..., description="Total number of answers evaluated")
 
-class EvaluationHistoryResponse(BaseModel):
-    """Response model for evaluation history"""
+class EvaluationGroupResponse(BaseModel):
+    """Response model for grouped evaluations"""
+    evaluation_group_id: int
     evaluations: List[EvaluationResponse]
-    knowledge_id: int
-    total_evaluations: int
-    average_score: float
-    current_mastery: float
+    created_at: datetime
+    mastery: float
     mastery_explanation: str
 
+class EvaluationHistoryResponse(BaseModel):
+    """Response model for evaluation history"""
+    evaluation_groups: List[EvaluationGroupResponse]
 
 # REQUEST MODELS (for processing only)
 
