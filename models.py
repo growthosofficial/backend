@@ -37,12 +37,14 @@ class MultipleChoiceQuestion(BaseModel):
         return v
 
 class MultipleChoiceQuestionResponse(BaseModel):
-    """Public response model for multiple choice questions (without answers)"""
-    question_id: int = Field(..., description="Database ID of the question")
-    question_text: str = Field(..., description="The question text")
-    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-    selected_answer_index: int | None = Field(None, description="Index of selected option (0-3)")
+    """Response model for multiple choice questions"""
+    question_id: int
+    question_text: str
+    options: List[str]
+    knowledge_id: int
+    selected_answer_index: int = 0
+    main_category: str
+    sub_category: str
 
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""

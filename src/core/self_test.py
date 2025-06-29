@@ -96,17 +96,18 @@ Feedback: {eval.get('feedback', '')}
 
     return eval_history
 
-def generate_free_text_question(category: str, content: str, knowledge_id: Optional[int] = None) -> Optional[Dict]:
+def generate_free_text_question(category: str, content: str, knowledge_id: Optional[int] = None, num_questions: int = 1) -> Optional[List[Dict]]:
     """
-    Generate a thought-provoking free text question for a given knowledge item
+    Generate thought-provoking free text questions for a given knowledge item
     
     Args:
         category: Knowledge category
         content: Knowledge content to generate question from
         knowledge_id: Optional ID to analyze past evaluation patterns
+        num_questions: Number of questions to generate (default: 1)
         
     Returns:
-        Dictionary with question_text if successful, None if failed
+        List of dictionaries with question_text if successful, None if failed
     """
     evaluation_context = ""
     if knowledge_id:
@@ -120,8 +121,8 @@ def generate_free_text_question(category: str, content: str, knowledge_id: Optio
             pass
 
     # Question generation prompt template
-    prompt_template = '''Generate 1 thought-provoking, open-ended question based on this knowledge content. 
-The question should test deep understanding and critical thinking, not just memorization.
+    prompt_template = '''Generate {num_questions} thought-provoking, open-ended questions based on this knowledge content. 
+Each question should test deep understanding and critical thinking, not just memorization.
 
 Knowledge Category: {category}
 Content: {content}
@@ -130,11 +131,11 @@ Previous Answers (newest to oldest):
 {evaluation_context}
 
 QUESTION GENERATION PRIORITIES:
-1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create a question that specifically addresses these gaps in understanding
+1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create questions that specifically address these gaps in understanding
 2. SECOND PRIORITY: Look for important concepts in the knowledge content that haven't been covered by the previous questions shown above
-3. Only if no incorrect points or uncovered content: Create a question that approaches previously covered concepts from a new angle
+3. Only if no incorrect points or uncovered content: Create questions that approach previously covered concepts from new angles
 
-Requirements for the question:
+Requirements for each question:
 1. Focus on the most important concepts in order of relevance to the user's understanding
 2. Combine multiple related concepts when they naturally fit together
 3. Skip less important details if including them would make the question too complex
@@ -142,7 +143,9 @@ Requirements for the question:
 5. Should require explanation, analysis, or application of concepts
 6. Should not be answerable with just a single word or simple fact
 7. Should encourage connecting ideas and demonstrating understanding
-8. IMPORTANT: Question should be answerable in about 3 sentences - don't try to cover too many points if it would require a longer explanation
+8. IMPORTANT: Each question should be answerable in about 3 sentences - don't try to cover too many points if it would require a longer explanation
+9. Questions should be diverse and cover different aspects of the content
+10. Avoid redundant or very similar questions
 
 Example approach:
 - First check the incorrect/missing points from previous answers and prioritize those topics
@@ -152,9 +155,16 @@ Example approach:
 - If there are technical details, focus on their practical implications rather than memorization
 - Better to have a focused question about key concepts than a broad question trying to cover everything
 
+IMPORTANT: You MUST generate exactly {num_questions} questions, no more and no less.
+
 Format your response as a JSON object with this structure:
 {{
-    "question_text": "Your thought-provoking question here that requires deep analysis and understanding..."
+    "questions": [
+        {{
+            "question_text": "Your thought-provoking question here that requires deep analysis and understanding..."
+        }},
+        // ... more questions ...
+    ]
 }}'''
 
     try:
@@ -162,34 +172,54 @@ Format your response as a JSON object with this structure:
         prompt = prompt_template.format(
             category=category,
             content=content,
-            evaluation_context=evaluation_context
+            evaluation_context=evaluation_context,
+            num_questions=num_questions
         )
         
         # Get response from Azure OpenAI
         response = call_azure_openai(prompt, "Question Generation")
         
         # Parse response
-        question_data = json.loads(response)
+        response_data = json.loads(response)
         
         # Validate response has required field
-        if "question_text" not in question_data:
-            print(f"Error: Response missing question_text field for category {category}")
+        if "questions" not in response_data or not isinstance(response_data["questions"], list):
+            print(f"Error: Response missing questions array for category {category}")
             print(f"Response content: {response}")
             return None
             
-        # Validate question_text is not empty
-        if not question_data["question_text"] or question_data["question_text"].strip() == "":
-            print(f"Error: Empty question_text for category {category}")
-            return None
-            
-        return question_data
+        questions_data = []
+        
+        # Validate each question
+        for question in response_data["questions"]:
+            if "question_text" not in question:
+                print(f"Error: Question missing question_text field for category {category}")
+                continue
+                
+            # Validate question_text is not empty
+            if not question["question_text"] or question["question_text"].strip() == "":
+                print(f"Error: Empty question_text for category {category}")
+                continue
+                
+            questions_data.append(question)
+        
+        # Validate we got the requested number of questions
+        if len(questions_data) != num_questions:
+            print(f"Warning: Expected {num_questions} questions but got {len(questions_data)}")
+            # Continue anyway as we might still have some valid questions
+        
+        # Shuffle the questions before returning
+        if questions_data:
+            random.shuffle(questions_data)
+        
+        return questions_data if questions_data else None
         
     except json.JSONDecodeError as e:
         print(f"Error parsing question response for category {category}: {e}")
         print(f"Response content: {response}")
         return None
     except Exception as e:
-        print(f"Error generating question for category {category}: {e}")
+        print(f"Error generating questions for category {category}: {e}")
         return None
 
 def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
