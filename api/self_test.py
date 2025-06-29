@@ -175,8 +175,10 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
             if evaluation['knowledge_id'] not in knowledge_evaluations_map:
                 knowledge_evaluations_map[evaluation['knowledge_id']] = []
             knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
-        
-        for answer_request in request.answers:
+
+        evaluation_groups = supabase_manager.create_evaluation_groups(len(request.answers))
+
+        for i, answer_request in enumerate(request.answers):
             knowledge_id = answer_request.knowledge_id
             
             knowledge_result = knowledge_map.get(knowledge_id)
@@ -213,7 +215,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 "incorrect_points": evaluation['incorrect_points'],
                 "question_type": QuestionType.FREE_TEXT,
                 "sample_answer": evaluation.get('sample_answer'),
-                "previous_mastery": current_mastery  # Store previous mastery
+                "evaluation_group_id": evaluation_groups[i]['id']
             }
             
             stored_eval = supabase_manager.create_evaluation(evaluation_data)
@@ -455,7 +457,12 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
         # Process each knowledge group
         all_evaluations = []
         
-        for knowledge_id, answers in knowledge_groups.items():
+        count = len(knowledge_groups)
+        evaluation_groups = supabase_manager.create_evaluation_groups(count)
+
+        print(evaluation_groups)
+
+        for i, (knowledge_id, answers) in enumerate(knowledge_groups.items()):
             knowledge_item = knowledge_map.get(knowledge_id)
             if not knowledge_item:
                 raise HTTPException(
@@ -467,7 +474,7 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
             
             # Format answers for evaluation
             answer_texts = []
-            for i, answer in enumerate(answers):
+            for answer in answers:
                 question = answer['question']
                 selected_index = answer['selected_index']
                 is_correct = selected_index == question['correct_answer_index']
@@ -524,7 +531,7 @@ Is Correct: {is_correct}
                     "mastery": mastery_result['mastery'],  # Add mastery from the calculation
                     "mastery_explanation": mastery_result['explanation'],  # Add mastery explanation,
                     "correct_answer": question['options'][question['correct_answer_index']],
-                    "previous_mastery": knowledge_item.get('mastery', 0.0)  # Store previous mastery
+                    "evaluation_group_id": evaluation_groups[i]['id']
                 }
                 
                 stored_eval = supabase_manager.create_evaluation(evaluation_data)
