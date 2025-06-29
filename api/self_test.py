@@ -1,8 +1,10 @@
 """
 Self-test generation and assessment logic for the Second Brain Knowledge Management System.
 """
-from typing import List
+from typing import List, Dict, Optional
 import random
+import json
+import time
 from fastapi import APIRouter, HTTPException, status, Query, Path
 
 from database.supabase_manager import supabase_manager
@@ -76,35 +78,61 @@ async def generate_free_text_questions(
             )
         
         # Randomly select items to generate questions from
-        selected_items = random.sample(valid_items, min(num_questions, len(valid_items)))
+        # If we have fewer items than requested questions, we'll generate multiple questions per item
+        if len(valid_items) >= num_questions:
+            # We have enough items, select randomly
+            selected_items = random.sample(valid_items, num_questions)
+        else:
+            # We have fewer items than requested questions
+            # Select all available items and we'll generate multiple questions per item
+            selected_items = valid_items.copy()
+        
+        # Calculate how many questions to generate per item
+        questions_per_item = max(1, num_questions // len(selected_items))
+        remaining_questions = num_questions % len(selected_items)
 
         # Generate questions for each selected item
         questions = []
         
-        for item in selected_items:
+        for i, item in enumerate(selected_items):
+            # Calculate how many questions to generate for this item
+            item_question_count = questions_per_item
+            if i < remaining_questions:
+                item_question_count += 1
+                
             # Get categories and content
             item_main_category = item.get('main_category', 'Unknown')
             sub_category = item.get('sub_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
-            # Generate question using our dedicated function
-            question_data = generate_free_text_question(
-                category=item_main_category,  # Pass main category for backwards compatibility
-                content=content,
-                knowledge_id=knowledge_id
-            )
-            
-            if question_data:
-                # Create Question object
-                question = Question(
-                    question_text=question_data['question_text'],
-                    main_category=item_main_category,
-                    sub_category=sub_category,
-                    knowledge_id=knowledge_id,
-                    answer=""
+            # Generate multiple questions for this item
+            for _ in range(item_question_count):
+                # Generate question using our dedicated function
+                question_data = generate_free_text_question(
+                    category=item_main_category,  # Pass main category for backwards compatibility
+                    content=content,
+                    knowledge_id=knowledge_id
                 )
-                questions.append(question)
+                
+                if question_data:
+                    # Create Question object
+                    question = Question(
+                        question_text=question_data['question_text'],
+                        main_category=item_main_category,
+                        sub_category=sub_category,
+                        knowledge_id=knowledge_id,
+                        answer=""
+                    )
+                    questions.append(question)
+                    
+                    # If we've generated enough questions, break
+                    if len(questions) >= num_questions:
+                        break
+            
+            # If we've generated enough questions, break
+            if len(questions) >= num_questions:
+                break
         
         if not questions:
             raise HTTPException(
