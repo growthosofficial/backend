@@ -95,15 +95,10 @@ app.include_router(self_test_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173", 
-        "http://localhost:3003",
-        "https://frontend-axc2vv97r-growthos-projects.vercel.app",
+        "https://gregarious-dusk-90c361.netlify.app",
         "https://frontend-ruby-seven-45.vercel.app",
         "https://frontend-bckh94c82-growthos-projects.vercel.app",
-        "https://frontend-rmctsqv7b-growthos-projects.vercel.app",
-        "https://frontend-o4mkr2mon-growthos-projects.vercel.app",
-        "https://frontend-nhknneucn-growthos-projects.vercel.app",    
+   ",    
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
