@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from database.supabase_manager import supabase_manager
 from src.core.self_test import (
+    format_evaluation_history,
     generate_free_text_questions,
     generate_multiple_choice_questions_batch,
     evaluate_free_text_answer,
@@ -127,8 +128,17 @@ async def generate_free_text_questions_endpoint(
         num_items = len(knowledge_items)
         question_distribution = distribute_questions_randomly(total_questions, num_items)
         
+        # Generate questions and prepare for batch creation
         all_questions = []
         questions_generated = 0
+
+        # Get evaluation history for each knowledge item
+        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids([item['id'] for item in knowledge_items])
+        knowledge_evaluations_map = {}
+        for evaluation in knowledge_evaluations:
+            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
+                knowledge_evaluations_map[evaluation['knowledge_id']] = []
+            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
         
         for i, item in enumerate(knowledge_items):
             if questions_generated >= total_questions:
@@ -139,13 +149,17 @@ async def generate_free_text_questions_endpoint(
             
             if item_questions == 0:
                 continue
+
+            # Format evaluation history for this item
+            eval_history = format_evaluation_history(knowledge_evaluations_map.get(item['id'], []))
                 
             # Generate questions for this item
             questions = generate_free_text_questions(
                 knowledge_content=item.get('content', ''),
                 main_category=item.get('main_category', 'Unknown'),
                 sub_category=item.get('sub_category', 'Unknown'),
-                num_questions=item_questions
+                num_questions=item_questions,
+                eval_history=eval_history
             )
             
             if questions:
@@ -200,6 +214,13 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
             count=len(request.answers),
             test_id=request.test_id if request.test_id else None
         )
+
+        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids([answer.knowledge_id for answer in request.answers])
+        knowledge_evaluations_map = {}
+        for evaluation in knowledge_evaluations:
+            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
+                knowledge_evaluations_map[evaluation['knowledge_id']] = []
+            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
         
         for i, answer_request in enumerate(request.answers):
             # Get knowledge item to verify it exists and get current mastery
@@ -213,6 +234,10 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
             knowledge_content = knowledge_item.get('content', '')
             current_mastery = knowledge_item.get('mastery', 0.0)
             
+            if answer_request.knowledge_id not in knowledge_evaluations_map:
+                knowledge_evaluations_map[answer_request.knowledge_id] = []
+            previous_evaluations = knowledge_evaluations_map[answer_request.knowledge_id]
+
             # Evaluate the answer
             evaluation = evaluate_free_text_answer(
                 question_text=answer_request.question_text,
@@ -249,7 +274,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                     'incorrect_points': evaluation['incorrect_points'],
                     'question_type': QuestionType.FREE_TEXT
                 },
-                previous_evaluations=[],
+                previous_evaluations=previous_evaluations,
                 current_mastery=current_mastery
             )
 
@@ -286,6 +311,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 )
                 
                 evaluations.append(evaluation_response)
+                previous_evaluations.append(evaluation_data)
             
             # After evaluation is complete, update scores
             total_score += evaluation['score']  # Score is already 0-5
@@ -368,6 +394,14 @@ async def generate_multiple_choice_questions(
         generated_questions = []
         questions_generated = 0
 
+        # Get evaluation history for each knowledge item
+        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids([item['id'] for item in knowledge_items])
+        knowledge_evaluations_map = {}
+        for evaluation in knowledge_evaluations:
+            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
+                knowledge_evaluations_map[evaluation['knowledge_id']] = []
+            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
+
         print("Distribution: ", question_distribution)
         
         for i, item in enumerate(knowledge_items):
@@ -379,13 +413,17 @@ async def generate_multiple_choice_questions(
             
             if item_questions == 0:
                 continue
+
+            # Format evaluation history for this item
+            eval_history = format_evaluation_history(knowledge_evaluations_map.get(item['id'], []))
                 
             # Generate questions for this item
             questions = generate_multiple_choice_questions_batch(
                 knowledge_content=item.get('content', ''),
                 main_category=item.get('main_category', 'Unknown'),
                 sub_category=item.get('sub_category', 'Unknown'),
-                num_questions=item_questions
+                num_questions=item_questions,
+                eval_history=eval_history
             )
             
             if questions:

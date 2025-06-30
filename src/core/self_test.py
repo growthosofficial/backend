@@ -95,7 +95,8 @@ def generate_free_text_questions(
     knowledge_content: str,
     main_category: str,
     sub_category: str,
-    num_questions: int = 3
+    num_questions: int = 3,
+    eval_history: str = ""
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Generate multiple free text questions from knowledge content using Azure OpenAI
@@ -105,6 +106,7 @@ def generate_free_text_questions(
         main_category: Main category of the knowledge
         sub_category: Sub category of the knowledge
         num_questions: Number of questions to generate (default: 3)
+        eval_history: Previous evaluation history to help generate better questions
         
     Returns:
         List of dictionaries, each containing question text and sample answer
@@ -125,22 +127,27 @@ REQUIREMENTS FOR EACH QUESTION:
 8. Each question should be answerable in about 2-3 sentences
 9. Questions should be diverse and cover different aspects of the content
 10. Avoid redundant or very similar questions
+11. If evaluation history is provided, focus on areas where the user has shown weaker understanding
+12. Generate questions that build upon concepts the user has already mastered, while introducing new angles
 
 Main Category: {main_category}
 Sub Category: {sub_category}
 Knowledge Content:
 {knowledge_content}
 
+Previous Evaluation History:
+{eval_history}
+
 Respond with valid JSON only, in this format:
 {{
     "questions": [
         {{
             "question_text": "First thought-provoking question here...",
-            "sample_answer": "A detailed sample answer that would get full marks"
+            "sample_answer": "Example of a good answer that demonstrates understanding..."
         }},
         {{
             "question_text": "Second thought-provoking question here...",
-            "sample_answer": "Another detailed sample answer"
+            "sample_answer": "Another example answer showing key points..."
         }},
         // ... more questions ...
     ]
@@ -306,7 +313,6 @@ def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, pr
     """
     prompt_template = '''Assess understanding and provide feedback. Respond with valid JSON only.
 
-Current Mastery: {current_mastery}
 
 CRITICAL MASTERY GUIDELINES:
 1. Free Text Answer Evaluation:
@@ -314,16 +320,13 @@ CRITICAL MASTERY GUIDELINES:
    - "I don't know" responses significantly decrease mastery (0.2-0.3 decrease)
    - Partial understanding can be recognized in free text answers
 
-2. Multiple Choice History Evaluation (if any):
-   - Multiple choice answers are binary - either fully correct or wrong
-   - Multiple consecutive correct answers needed to show mastery
-   - A single wrong answer indicates gaps in understanding
-
-3. General Rules:
+2. General Rules:
    - Recent performance has more weight than older answers
    - Free text answers have more impact than multiple choice
    - Consider answer quality and depth of explanation
    - Look for patterns of understanding vs. misconceptions
+
+Current Mastery: {current_mastery}
 
 Knowledge Content:
 {knowledge_content}
@@ -450,20 +453,15 @@ def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Di
     """
     prompt_template = '''Assess understanding and provide feedback for multiple choice answers. Respond with valid JSON only.
 
-Current Mastery: {current_mastery}
 
 CRITICAL MASTERY GUIDELINES:
-1. Multiple choice answers are binary - either fully correct or wrong
+1 **IMPORTANT: If the current answer is correct, mastery should NEVER decrease (it should be at least the current mastery or higher).**
 2. NO partial credit for wrong answers, even if reasoning shows some understanding
-3. Mastery calculation rules:
-- Priotize current evaluation over previous evaluations significantly. Should increase mastery when correct.
-- If current mastery is larger than or equal to 0.5, increase when more correct answers than wrong answers, decrease otherwise.
-- If current mastery is less than 0.5, increase when at least 1 correct answer, decrease otherwise.
-- **IMPORTANT: If the current answer is correct, mastery should NEVER decrease (it should be at least the current mastery or higher).**
+3. Priotize current evaluation over previous evaluations significantly. Should increase mastery when correct.
+4. Free text answers (if any) should have more impact than multiple choice
+5. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
 
-4. Recent performance has more weight than older answers
-5. Free text answers (if any) should have more impact than multiple choice
-6. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
+Current Mastery: {current_mastery}
 
 Knowledge Content:
 {knowledge_content}
@@ -561,7 +559,8 @@ def generate_multiple_choice_questions_batch(
     knowledge_content: str,
     main_category: str,
     sub_category: str,
-    num_questions: int = 3
+    num_questions: int = 3,
+    eval_history: str = ""
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Generate multiple multiple choice questions from knowledge content using Azure OpenAI
@@ -571,6 +570,7 @@ def generate_multiple_choice_questions_batch(
         main_category: Main category of the knowledge
         sub_category: Sub category of the knowledge
         num_questions: Number of questions to generate (default: 3)
+        eval_history: Previous evaluation history to help generate better questions
         
     Returns:
         List of dictionaries, each containing question text, options, correct answer index, and explanation
@@ -588,11 +588,16 @@ REQUIREMENTS FOR EACH QUESTION:
 5. Avoid redundant or very similar questions
 6. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
 7. Refer to the options in the explanation as "Option A", "Option B", "Option C", "Option D"
+8. If evaluation history is provided, focus on areas where the user has shown weaker understanding
+9. Generate questions that build upon concepts the user has already mastered, while introducing new angles
 
 Main Category: {main_category}
 Sub Category: {sub_category}
 Knowledge Content:
 {knowledge_content}
+
+Previous Evaluation History:
+{eval_history}
 
 Respond with valid JSON only, in this format:
 {{
