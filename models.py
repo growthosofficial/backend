@@ -84,6 +84,9 @@ class EvaluationResponse(BaseModel):
     sample_answer: str | None = None
     is_correct: bool | None = None
     multiple_choice_question_id: int | None = None
+    # Category fields
+    main_category: str | None = None
+    sub_category: str | None = None
     # Multiple choice specific fields
     options: List[str] | None = None
     selected_index: int | None = None
