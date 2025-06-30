@@ -191,14 +191,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
     5. Returns detailed evaluation feedback
     """
     try:
-        knowledge_ids = [answer.knowledge_id for answer in request.answers]
-        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids(knowledge_ids)
-        knowledge_evaluations_map = {}
-        for evaluation in knowledge_evaluations:
-            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
-                knowledge_evaluations_map[evaluation['knowledge_id']] = []
-            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
-        
+        evaluations = []
         total_score = 0
         total_possible = 0
         
@@ -209,10 +202,6 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
         )
         
         for i, answer_request in enumerate(request.answers):
-            if answer_request.knowledge_id not in knowledge_evaluations_map:
-                knowledge_evaluations_map[answer_request.knowledge_id] = []
-            evaluations = knowledge_evaluations_map[answer_request.knowledge_id]
-
             # Get knowledge item to verify it exists and get current mastery
             knowledge_item = supabase_manager.get_knowledge_by_id(answer_request.knowledge_id)
             if not knowledge_item:
@@ -260,7 +249,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                     'incorrect_points': evaluation['incorrect_points'],
                     'question_type': QuestionType.FREE_TEXT
                 },
-                previous_evaluations=evaluations,
+                previous_evaluations=[],
                 current_mastery=current_mastery
             )
 
