@@ -122,7 +122,7 @@ class ProcessTextRequest(BaseModel):
     """Request model for processing text input"""
     text: str = Field(..., min_length=1, max_length=10000, description="Text to process")
     threshold: float = Field(0.8, ge=0.0, le=1.0, description="Similarity threshold")
-    goal: Optional[str] = Field(None, max_length=500, description="Learning goal for relevance analysis")
+    goal: Optional[str] = Field(None, max_length=2000, description="Learning goal for relevance analysis")
 
 
 # RESPONSE MODELS (read-only data from database)
