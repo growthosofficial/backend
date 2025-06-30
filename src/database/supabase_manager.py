@@ -603,30 +603,32 @@ class SupabaseManager:
             print(f"Error updating test scores: {e}")
             return None
 
-    def get_latest_tests(self, limit: int = 10, category: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_latest_tests(self, limit: int = 1000, category: Optional[str] = None, sort_order: str = "desc", start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get the latest completed tests with their scores
-        
         Args:
             limit: Maximum number of tests to return
             category: Optional category to filter by
-            
+            sort_order: 'asc' or 'desc' for creation date order (default: 'desc')
+            start_date: Optional ISO 8601 string for earliest created_at
+            end_date: Optional ISO 8601 string for latest created_at
         Returns:
             List of completed test records ordered by creation date
         """
         try:
             query = self.supabase.table('tests')\
                 .select('*')\
-                .eq('is_completed', True)\
-                .order('created_at', desc=True)\
-                .limit(limit)
-            
+                .eq('is_completed', True)
             if category:
                 query = query.eq('category', category)
-                
+            if start_date:
+                query = query.gte('created_at', start_date)
+            if end_date:
+                query = query.lte('created_at', end_date)
+            query = query.order('created_at', desc=(sort_order != "asc"))\
+                .limit(limit)
             result = query.execute()
             return result.data if result.data else []
-            
         except Exception as e:
             print(f"Error getting latest tests: {e}")
             return []
@@ -664,6 +666,37 @@ class SupabaseManager:
         except Exception as e:
             print(f"Error getting random knowledge: {e}")
             return []
+    
+    def get_knowledge_item_main_category_distribution(self) -> List[Dict[str, int]]:
+        """
+        Get the count distribution of knowledge items by main category
+        """
+        try:
+            result = self.supabase.table('knowledge_items') \
+                .select("main_category, main_category.count()")\
+                .execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting distribution: {e}")
+            return []
+
+    # GOALS DATA RETRIEVAL (READ-ONLY)
+    def get_goals(self) -> List[Dict]:
+        """
+        Retrieve all goals from the 'goals' table.
+        Returns:
+            List of goal records as dictionaries
+        """
+        result = self.supabase.table('goals').select('*').order('created_at', desc=True).execute()
+        return result.data
+
+    def get_average_mastery(self) -> float:
+        """
+        Get the average mastery of all knowledge items
+        """
+        result = self.supabase.table('knowledge_items').select('mastery.avg()').execute()
+        return result.data[0]['avg'] if result.data else 0
+
 
 # Create global instance
 supabase_manager = SupabaseManager()
