@@ -193,7 +193,7 @@ def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content
         Dictionary with evaluation results including score (0-5), feedback, etc.
     """
 
-    prompt_template = '''You are a VERY STRICT evaluator. You MUST follow these rules exactly.
+    prompt_template = '''You are an strict educational evaluator providing constructive feedback on student answers.
 
 Main Category: {main_category}
 Sub Category: {sub_category}
@@ -201,42 +201,29 @@ Question: {question}
 Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
-CRITICAL - Initial Checks:
-1. If the answer is irrelevant, off-topic, or just a greeting/single word, score it 0 immediately
-2. If the answer shows no attempt to address the question's specific points, score it 0
-3. Only proceed with detailed evaluation if the answer makes a genuine attempt to address the question
+Evaluation Guidelines:
+1. Assess whether the answer addresses the question appropriately
+2. Check if the answer demonstrates understanding of the key concepts
+3. Consider the completeness and accuracy of the response
+4. Provide helpful feedback for improvement
 
-CRITICAL - Answer Completeness Check:
-1. First identify ALL parts of what was asked in the question
-2. Check if EACH part was properly addressed in the answer
-3. Example: If question asks "explain X and give example", both parts must be present
-4. Missing ANY major part of the question should result in score ≤ 2
+Scoring Guidelines (0-5 scale):
+0 = Answer is off-topic, irrelevant, or shows no attempt to address the question
+1 = Very basic attempt with significant misunderstandings or missing key points
+2 = Basic understanding but missing important elements or containing errors
+3 = Moderate understanding with some gaps or superficial treatment
+4 = Good understanding with minor gaps or areas for improvement
+5 = Comprehensive understanding with thorough explanations and accurate information
 
-Score the answer on a scale of 0-5 using these strict guidelines:
-0 = Any of these conditions:
-   - Not understood / Incorrect / Completely off-topic
-   - Single word or greeting only
-   - No attempt to address the question
-   - Irrelevant response
-1 = Very basic attempt but mostly incorrect or missing key points
-2 = Basic understanding but significant parts missing or incorrect
-3 = Moderate understanding, some key parts missing or superficial
-4 = Good understanding with minor gaps or imperfections
-5 = ONLY if ALL of these are true:
-   - ALL parts of the question were fully addressed
-   - ALL explanations are thorough and accurate
-   - ALL requested examples/applications provided
-   - Shows deep understanding beyond basic facts
+Note: If the answer appears to be very short or doesn't address the question, consider whether it demonstrates any understanding of the topic.
 
-CRITICAL: The answer "{answer}" appears to be very short. If it's a single word, number, or doesn't address the question, you MUST score it 0.
-
-Format your response as a JSON object with this structure:
+Please provide your evaluation in this JSON format:
 {{
     "score": <0-5>,
-    "feedback": "Clear explanation of strengths/weaknesses. Use you to refer to the user.",
+    "feedback": "Constructive feedback explaining strengths and areas for improvement. Address the student directly.",
     "correct_points": ["Point 1", "Point 2"],
     "incorrect_points": ["Missing/wrong point 1", "Missing/wrong point 2"],
-    "sample_answer": "What a good answer would look like"
+    "sample_answer": "An example of what a good answer would look like"
 }}'''
 
     try:
