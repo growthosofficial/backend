@@ -34,7 +34,7 @@ from core.similarity import SSC
 from core.llm_updater import LLMUpdater, _EMBEDDINGS_CACHE_FILE, precompute_main_category_embeddings
 from database.supabase_manager import supabase_manager
 from utils.category_mapping import get_all_subject_categories
-from utils.helpers import log_api_call, create_error_response
+from utils.helpers import log_api_call, create_error_response, parse_datetime_safe
 
 from api.self_test import router as self_test_router
 
@@ -241,11 +241,14 @@ async def get_categories():
         total_items = 0
         
         for main_cat_data in grouped_categories.values():
+            # Handle datetime parsing with proper error handling
+            last_updated = parse_datetime_safe(main_cat_data["last_updated"])
+            
             category_response = CategoryResponse(
                 main_category=main_cat_data["main_category"],
                 sub_categories=main_cat_data["sub_categories"],
                 total_items=main_cat_data["total_items"],
-                last_updated=datetime.fromisoformat(main_cat_data["last_updated"]) if main_cat_data["last_updated"] else None
+                last_updated=last_updated
             )
             categories.append(category_response)
             total_sub_categories += len(main_cat_data["sub_categories"])
@@ -556,13 +559,13 @@ async def get_items_due_for_review(limit: int = Query(50, ge=1, le=200, descript
                 tags=item.get('tags', []),
                 source=item.get('source', 'text'),
                 strength_score=item.get('strength_score'),
-                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
-                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
+                last_reviewed=parse_datetime_safe(item.get('last_reviewed')),
+                next_review_due=parse_datetime_safe(item.get('next_review_due')),
                 review_count=item.get('review_count', 0),
                 ease_factor=item.get('ease_factor', 2.5),
                 interval_days=item.get('interval_days', 1),
-                created_at=datetime.fromisoformat(item['created_at']),
-                last_updated=datetime.fromisoformat(item['last_updated'])
+                created_at=parse_datetime_safe(item['created_at']) or datetime.now(),
+                last_updated=parse_datetime_safe(item['last_updated']) or datetime.now()
             )
             formatted_items.append(formatted_item)
         

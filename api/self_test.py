@@ -16,6 +16,7 @@ from src.core.self_test import (
     calculate_free_text_mastery,
     calculate_multiple_choice_mastery
 )
+from src.utils.helpers import parse_datetime_safe
 from models import (
     QuestionType, Question, GenerateQuestionsResponse, AnswerRequest, EvaluationResponse,
     BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
@@ -76,7 +77,7 @@ router = APIRouter(
 # Free Text Question Endpoints
 @router.post("/free-text/generate", response_model=GenerateQuestionsResponse)
 async def generate_free_text_questions_endpoint(
-    num_questions: int = Query(default=3, ge=1, le=10, description="Total number of questions to generate"),
+    num_questions: int = Query(default=3, ge=1, le=20, description="Total number of questions to generate"),
     main_category: Optional[str] = Query(default=None, description="Main category to filter by")
 ):
     """
@@ -85,7 +86,7 @@ async def generate_free_text_questions_endpoint(
     Questions are distributed evenly and randomly across knowledge items.
     
     Args:
-        num_questions: Total number of questions to generate (1-10)
+        num_questions: Total number of questions to generate (1-20)
         main_category: Optional main category filter
         
     Returns:
@@ -312,7 +313,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
 # Multiple Choice Question Endpoints
 @router.post("/multiple-choice/generate", response_model=GenerateMultipleChoiceResponse)
 async def generate_multiple_choice_questions(
-    num_questions: int = Query(default=3, ge=1, le=10, description="Total number of questions to generate"),
+    num_questions: int = Query(default=3, ge=1, le=20, description="Total number of questions to generate"),
     main_category: Optional[str] = Query(default=None, description="Main category to filter by")
 ):
     """
@@ -321,7 +322,7 @@ async def generate_multiple_choice_questions(
     Questions are distributed evenly and randomly across knowledge items.
     
     Args:
-        num_questions: Total number of questions to generate (1-10)
+        num_questions: Total number of questions to generate (1-20)
         main_category: Optional main category filter
         
     Returns:
@@ -629,7 +630,7 @@ async def get_evaluations_by_knowledge_id(
             if not group_id:
                 continue
                 
-            created_at = datetime.fromisoformat(eval_data.get('created_at'))
+            created_at = parse_datetime_safe(eval_data.get('created_at')) or datetime.now()
             
             # Create evaluation response
             evaluation = EvaluationResponse(

@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def format_datetime_for_api(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def create_error_response(error_message: str, detail: str = None) -> Dict[str, Any]:
+def create_error_response(error_message: str, detail: Optional[str] = None) -> Dict[str, Any]:
     """Create standardized error response."""
     return {
         "error": error_message,
@@ -108,7 +108,7 @@ def create_error_response(error_message: str, detail: str = None) -> Dict[str, A
     }
 
 
-def log_api_call(endpoint: str, method: str, status_code: int, duration: float = None):
+def log_api_call(endpoint: str, method: str, status_code: int, duration: Optional[float] = None):
     """Log API call information."""
     log_message = f"{method} {endpoint} - Status: {status_code}"
     if duration is not None:
@@ -132,3 +132,50 @@ def clean_text_input(text: str) -> str:
     cleaned = cleaned.replace('\x00', '')  # Remove null bytes
     
     return cleaned.strip()
+
+
+def parse_datetime_safe(dt_str: Optional[str]) -> Optional[datetime]:
+    """
+    Safely parse datetime string with robust error handling.
+    Handles various ISO format issues including 5-digit microseconds.
+    
+    Args:
+        dt_str: Datetime string to parse, can be None
+        
+    Returns:
+        Parsed datetime object or None if parsing fails
+    """
+    if not dt_str:
+        return None
+    
+    try:
+        # Try standard fromisoformat first
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        try:
+            # Handle 5-digit microseconds by padding to 6 digits
+            if '.' in dt_str and '+' in dt_str:
+                # Split at the timezone part
+                timezone_part = dt_str[dt_str.find('+'):]
+                base_part = dt_str[:dt_str.find('+')]
+                
+                # Handle microseconds part
+                if '.' in base_part:
+                    date_part, time_part = base_part.split('T')
+                    if '.' in time_part:
+                        time_base, microsec = time_part.split('.')
+                        # Pad microseconds to 6 digits
+                        microsec = microsec.ljust(6, '0')[:6]
+                        time_part = f"{time_base}.{microsec}"
+                    
+                    fixed_dt_str = f"{date_part}T{time_part}{timezone_part}"
+                    return datetime.fromisoformat(fixed_dt_str)
+                else:
+                    # No microseconds, just add timezone
+                    return datetime.fromisoformat(f"{base_part}{timezone_part}")
+            else:
+                # No timezone, try without
+                return datetime.fromisoformat(dt_str)
+        except (ValueError, AttributeError):
+            # If all parsing fails, return None
+            return None
