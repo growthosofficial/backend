@@ -61,7 +61,7 @@ class AnswerRequest(BaseModel):
 class MultipleChoiceAnswerRequest(BaseModel):
     """Request model for evaluating a single multiple choice answer"""
     question_id: int = Field(..., gt=0, description="ID of the multiple choice question")
-    selected_index: int = Field(..., ge=0, le=3, description="Index of the selected answer (0-3)")
+    selected_answer_index: int = Field(..., ge=0, le=3, description="Index of the selected answer (0-3)")
     knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
 
 class MultipleChoiceBatchAnswerRequest(BaseModel):
@@ -90,7 +90,7 @@ class EvaluationResponse(BaseModel):
     sub_category: str | None = None
     # Multiple choice specific fields
     options: Optional[List[str]] = None
-    selected_index: Optional[int] = None
+    selected_answer_index: Optional[int] = None
     correct_answer_index: Optional[int] = None
 
 class BatchAnswerRequest(BaseModel):
@@ -253,7 +253,7 @@ class MultipleChoiceEvaluationDetail(BaseModel):
     """Detailed evaluation for a multiple choice question"""
     question_text: str
     options: List[str]
-    selected_index: int
+    selected_answer_index: int
     correct_answer_index: int
     is_correct: bool
     feedback: str

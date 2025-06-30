@@ -498,13 +498,13 @@ async def evaluate_multiple_choice_answers(request: MultipleChoiceBatchAnswerReq
                 continue
                 
             # Check if answer is correct
-            is_correct = answer_request.selected_index == question['correct_answer_index']
+            is_correct = answer_request.selected_answer_index == question['correct_answer_index']
             if is_correct:
                 total_score += 1  # 1 point for correct answer, 0 for wrong
             
             # Format answer text for evaluation
             answer_text = f"""Question: {question['question_text']}
-Selected Answer: {question['options'][answer_request.selected_index]}
+Selected Answer: {question['options'][answer_request.selected_answer_index]}
 Correct Answer: {question['options'][question['correct_answer_index']]}
 Is Correct: {is_correct}"""
             
@@ -552,7 +552,7 @@ Is Correct: {is_correct}"""
                 evaluation = MultipleChoiceEvaluationDetail(
                     question_text=question['question_text'],
                     options=question['options'],
-                    selected_index=answer_request.selected_index,
+                    selected_answer_index=answer_request.selected_answer_index,
                     correct_answer_index=question['correct_answer_index'],
                     is_correct=is_correct,
                     feedback=question['explanation'],
