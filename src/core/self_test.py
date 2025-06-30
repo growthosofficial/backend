@@ -95,8 +95,7 @@ def generate_free_text_questions(
     knowledge_content: str,
     main_category: str,
     sub_category: str,
-    num_questions: int = 3,
-    eval_history: str = ""
+    num_questions: int = 3
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Generate multiple free text questions from knowledge content using Azure OpenAI
@@ -106,7 +105,6 @@ def generate_free_text_questions(
         main_category: Main category of the knowledge
         sub_category: Sub category of the knowledge
         num_questions: Number of questions to generate (default: 3)
-        eval_history: Previous evaluation history to help generate better questions
         
     Returns:
         List of dictionaries, each containing question text and sample answer
@@ -127,27 +125,22 @@ REQUIREMENTS FOR EACH QUESTION:
 8. Each question should be answerable in about 2-3 sentences
 9. Questions should be diverse and cover different aspects of the content
 10. Avoid redundant or very similar questions
-11. If evaluation history is provided, focus on areas where the user has shown weaker understanding
-12. Generate questions that build upon concepts the user has already mastered, while introducing new angles
 
 Main Category: {main_category}
 Sub Category: {sub_category}
 Knowledge Content:
 {knowledge_content}
 
-Previous Evaluation History:
-{eval_history}
-
 Respond with valid JSON only, in this format:
 {{
     "questions": [
         {{
             "question_text": "First thought-provoking question here...",
-            "sample_answer": "Example of a good answer that demonstrates understanding..."
+            "sample_answer": "A detailed sample answer that would get full marks"
         }},
         {{
             "question_text": "Second thought-provoking question here...",
-            "sample_answer": "Another example answer showing key points..."
+            "sample_answer": "Another detailed sample answer"
         }},
         // ... more questions ...
     ]
@@ -311,22 +304,26 @@ def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, pr
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''Assess the user's understanding and provide constructive feedback. Respond with valid JSON only.
+    prompt_template = '''Assess understanding and provide feedback. Respond with valid JSON only.
+
+Current Mastery: {current_mastery}
 
 CRITICAL MASTERY GUIDELINES:
-1. Focus on Understanding:
-   - Look for depth of conceptual understanding
-   - Consider ability to explain and connect ideas
-   - Value clear articulation of complex concepts
-   - Recognize partial understanding of difficult topics
+1. Free Text Answer Evaluation:
+   - Good explanations increase mastery, poor answers decrease mastery
+   - "I don't know" responses significantly decrease mastery (0.2-0.3 decrease)
+   - Partial understanding can be recognized in free text answers
 
-2. Learning Progress:
-   - Recent demonstrations of knowledge carry more weight
-   - Free-form explanations reveal deeper understanding
-   - Look for growth in comprehension over time
-   - Consider both breadth and depth of understanding
+2. Multiple Choice History Evaluation (if any):
+   - Multiple choice answers are binary - either fully correct or wrong
+   - Multiple consecutive correct answers needed to show mastery
+   - A single wrong answer indicates gaps in understanding
 
-Current Understanding Level: {current_mastery}
+3. General Rules:
+   - Recent performance has more weight than older answers
+   - Free text answers have more impact than multiple choice
+   - Consider answer quality and depth of explanation
+   - Look for patterns of understanding vs. misconceptions
 
 Knowledge Content:
 {knowledge_content}
@@ -335,15 +332,16 @@ Question Type: {question_type}
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Previous Learning History (newest to oldest):
+Previous Answers (newest to oldest):
 {evaluation_history}
 
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) Demonstrated strengths in understanding 2) Specific concepts that need more focus"
+    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
 }}
 '''
+
 
     try:
         # Format evaluation history
@@ -450,36 +448,36 @@ def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Di
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''Assess the user's understanding and provide constructive feedback. Respond with valid JSON only.
+    prompt_template = '''Assess understanding and provide feedback for multiple choice answers. Respond with valid JSON only.
+
+Current Mastery: {current_mastery}
 
 CRITICAL MASTERY GUIDELINES:
-1. Understanding Progress:
-   - **IMPORTANT: If the user demonstrates clear understanding, their mastery level should never decrease**
-   - Look for consistent demonstration of concept comprehension
-   - Consider both breadth and accuracy of understanding
-   - Value steady improvement over time
+1. Multiple choice answers are binary - either fully correct or wrong
+2. NO partial credit for wrong answers, even if reasoning shows some understanding
+3. Mastery calculation rules:
+- Priotize current evaluation over previous evaluations significantly. Should increase mastery when correct.
+- If current mastery is larger than or equal to 0.5, increase when more correct answers than wrong answers, decrease otherwise.
+- If current mastery is less than 0.5, increase when at least 1 correct answer, decrease otherwise.
+- **IMPORTANT: If the current answer is correct, mastery should NEVER decrease (it should be at least the current mastery or higher).**
 
-2. Learning Assessment:
-   - Recent demonstrations of knowledge are most significant
-   - Look for patterns in topic comprehension
-   - Consider overall grasp of interconnected concepts
-   - **IMPORTANT: Strong current understanding should maintain or improve mastery**
-
-Current Understanding Level: {current_mastery}
+4. Recent performance has more weight than older answers
+5. Free text answers (if any) should have more impact than multiple choice
+6. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
 
 Knowledge Content:
 {knowledge_content}
 
-Current Assessment:
+Current Evaluation:
 {current_evaluation}
 
-Previous Learning History (newest to oldest):
+Previous Answers (newest to oldest, free text weighs more than multiple choice):
 {evaluation_history}
 
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) Areas where understanding is strong 2) Concepts that need reinforcement"
+    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
 }}
 '''
 
@@ -563,8 +561,7 @@ def generate_multiple_choice_questions_batch(
     knowledge_content: str,
     main_category: str,
     sub_category: str,
-    num_questions: int = 3,
-    eval_history: str = ""
+    num_questions: int = 3
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Generate multiple multiple choice questions from knowledge content using Azure OpenAI
@@ -574,7 +571,6 @@ def generate_multiple_choice_questions_batch(
         main_category: Main category of the knowledge
         sub_category: Sub category of the knowledge
         num_questions: Number of questions to generate (default: 3)
-        eval_history: Previous evaluation history to help generate better questions
         
     Returns:
         List of dictionaries, each containing question text, options, correct answer index, and explanation
@@ -592,16 +588,11 @@ REQUIREMENTS FOR EACH QUESTION:
 5. Avoid redundant or very similar questions
 6. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
 7. Refer to the options in the explanation as "Option A", "Option B", "Option C", "Option D"
-8. If evaluation history is provided, focus on areas where the user has shown weaker understanding
-9. Generate questions that build upon concepts the user has already mastered, while introducing new angles
 
 Main Category: {main_category}
 Sub Category: {sub_category}
 Knowledge Content:
 {knowledge_content}
-
-Previous Evaluation History:
-{eval_history}
 
 Respond with valid JSON only, in this format:
 {{
