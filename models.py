@@ -143,7 +143,7 @@ class ProcessTextResponse(BaseModel):
     similar_sub_category: str | None = Field(None, description="Most similar existing sub-category")
     similarity_score: float | None = Field(None, description="Similarity score if match found")
     goal_provided: bool = Field(..., description="Whether a learning goal was provided")
-    goal_relevance_score: Optional[int] = Field(None, ge=1, le=10, description="Overall goal relevance score (0-10)")
+    goal_relevance_score: Optional[int] = Field(None, ge=0, le=10, description="Overall goal relevance score (0-10)")
     goal_relevance_explanation: Optional[str] = Field(None, description="Brief explanation of the goal relevance score")
     status: str = Field("success", description="Request status")
 
