@@ -50,13 +50,6 @@ def call_azure_openai(prompt: str, prompt_name: str) -> str:
             temperature=0.7,
         )
 
-        # create file into tmp/prompts with timestamp and prompt_name
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{prompt_name.replace(' ', '_')}.txt"
-        filepath = os.path.join("tmp/prompts", filename)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-        
         if response.choices and response.choices[0].message.content:
             return response.choices[0].message.content
             
