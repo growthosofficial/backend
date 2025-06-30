@@ -122,7 +122,7 @@ REQUIREMENTS FOR EACH QUESTION:
 5. Should require explanation, analysis, or application of concepts
 6. Should not be answerable with just a single word or simple fact
 7. Should encourage connecting ideas and demonstrating understanding
-8. Each question should be answerable in about 3-5 sentences
+8. Each question should be answerable in about 2-3 sentences
 9. Questions should be diverse and cover different aspects of the content
 10. Avoid redundant or very similar questions
 
@@ -310,16 +310,12 @@ Current Mastery: {current_mastery}
 
 CRITICAL MASTERY GUIDELINES:
 1. Free Text Answer Evaluation:
-   - Good explanations increase mastery (0.1-0.2 increase)
-   - Poor answers decrease mastery (0.1-0.2 decrease)
+   - Good explanations increase mastery, poor answers decrease mastery
    - "I don't know" responses significantly decrease mastery (0.2-0.3 decrease)
    - Partial understanding can be recognized in free text answers
 
 2. Multiple Choice History Evaluation (if any):
    - Multiple choice answers are binary - either fully correct or wrong
-   - NO partial credit for wrong multiple choice answers
-   - Each wrong multiple choice decreases mastery by 0.1-0.2
-   - Each correct multiple choice increases mastery by 0.05-0.1
    - Multiple consecutive correct answers needed to show mastery
    - A single wrong answer indicates gaps in understanding
 
@@ -342,15 +338,10 @@ Previous Answers (newest to oldest):
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) How well you understand this topic 2) What you've demonstrated good knowledge of 3) What you need to work on"
+    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
 }}
+'''
 
-Example responses:
-"Your free text answer shows good understanding of database concepts, but your multiple choice history reveals gaps in normalization forms. While you can explain relationships well, the pattern of wrong multiple choice answers about normalization indicates areas needing review."
-
-"Your detailed explanation of neural networks demonstrates strong understanding. However, recent multiple choice answers about activation functions were incorrect. Focus on connecting your theoretical knowledge with specific technical details."
-
-"Your answers show declining mastery. The current 'I don't know' response and previous wrong multiple choice answers suggest fundamental gaps in understanding. You need to review the basic concepts before proceeding."'''
 
     try:
         # Format evaluation history
@@ -465,13 +456,9 @@ CRITICAL MASTERY GUIDELINES:
 1. Multiple choice answers are binary - either fully correct or wrong
 2. NO partial credit for wrong answers, even if reasoning shows some understanding
 3. Mastery calculation rules:
-   - If more answers are correct than wrong: mastery should INCREASE or stay the same
-   - If more answers are wrong than correct: mastery should DECREASE
-   - If equal correct/wrong: mastery should stay the same or increase slightly
-   - Each correct answer should increase mastery by 0.05-0.15
-   - Each wrong answer should decrease mastery by 0.1-0.2
-   - Multiple consecutive correct answers needed to show mastery
-   - A single wrong answer indicates gaps in understanding
+- If current mastery is larger than or equal to 0.5, increase when more correct answers than wrong answers, decrease otherwise.
+- If current mastery is less than 0.5, increase when at least 1 correct answer, decrease otherwise.
+
 4. Recent performance has more weight than older answers
 5. Free text answers (if any) should have more impact than multiple choice
 6. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
@@ -488,15 +475,9 @@ Previous Answers (newest to oldest, free text weighs more than multiple choice):
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) Pattern of multiple choice performance 2) Areas of demonstrated understanding 3) Specific concepts needing review"
+    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
 }}
-
-Example responses:
-"Your multiple choice performance shows inconsistent understanding. While you correctly identified database relationships in 2 questions, the wrong answer about normalization forms indicates a fundamental gap. Focus on reviewing the specific criteria for different normalization forms."
-
-"Recent answers show a pattern of incorrect responses about quantum mechanics principles. Each wrong answer suggests gaps in core understanding. You need to review the fundamental concepts before moving to more complex applications."
-
-"Multiple choice results demonstrate solid grasp of machine learning basics. You've consistently answered correctly about algorithm types and their applications. Continue practicing with more advanced concepts to further strengthen understanding."'''
+'''
 
     try:
         # Format evaluation history
@@ -617,18 +598,11 @@ Each question should test deep understanding and have plausible but clearly inco
 REQUIREMENTS FOR EACH QUESTION:
 1. Focus on the most important concepts in order of relevance
 2. Combine multiple related concepts when they naturally fit together
-3. Skip less important details if including them would make the question too complex
-4. Keep questions focused and concise while still being thought-provoking
-5. Should test understanding, analysis, or application of concepts
-6. Each question should have exactly 4 options (A, B, C, D)
-7. Only one option should be clearly correct
-8. Other options should be plausible but clearly wrong
-9. Questions should be diverse and cover different aspects of the content
-10. Avoid redundant or very similar questions
-11. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the question text
-12. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
-13. Write clean question text and clean option text without any letter or number prefixes
-14. Refer to the options as "Option A", "Option B", "Option C", "Option D"
+3. Each question should have exactly 4 options, only one option should be clearly correct, other options should be plausible but clearly wrong
+4. Questions should be diverse and cover different aspects of the content
+5. Avoid redundant or very similar questions
+6. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
+7. Refer to the options in the explanation as "Option A", "Option B", "Option C", "Option D"
 
 Main Category: {main_category}
 Sub Category: {sub_category}
