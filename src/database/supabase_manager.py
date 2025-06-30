@@ -520,12 +520,13 @@ class SupabaseManager:
             print(f"Error getting multiple choice questions: {e}")
             return []
 
-    def create_test(self, category: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def create_test(self, category: Optional[str] = None, total_score: int = 0) -> Optional[Dict[str, Any]]:
         """
         Create a new test record
         
         Args:
             category: Optional category for the test
+            total_score: Total possible score for the test
             
         Returns:
             Created test record if successful, None otherwise
@@ -536,7 +537,7 @@ class SupabaseManager:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "category": category,
                 "score": 0,
-                "total_score": 0
+                "total_score": total_score
             }
             result = self.supabase.table('tests').insert(data).execute()
             return result.data[0] if result.data else None
@@ -545,14 +546,13 @@ class SupabaseManager:
             print(f"Error creating test: {e}")
             return None
 
-    def update_test_scores(self, test_id: int, score: int, total_score: int) -> Optional[Dict[str, Any]]:
+    def update_test_scores(self, test_id: int, score: int) -> Optional[Dict[str, Any]]:
         """
-        Update the scores for a test
+        Update the score for a test and mark it as completed
         
         Args:
             test_id: ID of the test to update
             score: Current score achieved
-            total_score: Total possible score
             
         Returns:
             Updated test record or None if failed
@@ -561,7 +561,7 @@ class SupabaseManager:
             result = self.supabase.table('tests')\
                 .update({
                     "score": score,
-                    "total_score": total_score,
+                    "is_completed": True,
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 })\
                 .eq('id', test_id)\
@@ -574,18 +574,19 @@ class SupabaseManager:
 
     def get_latest_tests(self, limit: int = 10, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Get the latest tests with their scores
+        Get the latest completed tests with their scores
         
         Args:
             limit: Maximum number of tests to return
             category: Optional category to filter by
             
         Returns:
-            List of test records ordered by creation date
+            List of completed test records ordered by creation date
         """
         try:
             query = self.supabase.table('tests')\
                 .select('*')\
+                .eq('is_completed', True)\
                 .order('created_at', desc=True)\
                 .limit(limit)
             

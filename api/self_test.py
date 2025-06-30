@@ -92,8 +92,14 @@ async def generate_free_text_questions_endpoint(
         List of generated questions with test_id
     """
     try:
+        # Calculate total possible score (each free text question is worth 5 points)
+        total_possible_score = num_questions * 5
+        
         # Create a new test record
-        test_record = supabase_manager.create_test(category=main_category or "All Categories")
+        test_record = supabase_manager.create_test(
+            category=main_category or "All Categories",
+            total_score=total_possible_score
+        )
         if not test_record:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -288,8 +294,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
         if request.test_id:
             supabase_manager.update_test_scores(
                 test_id=request.test_id,
-                score=total_score,
-                total_score=total_possible
+                score=total_score
             )
         
         return BatchEvaluationResponse(
@@ -323,8 +328,14 @@ async def generate_multiple_choice_questions(
         List of generated multiple choice questions with test_id
     """
     try:
+        # Calculate total possible score (each multiple choice question is worth 1 point)
+        total_possible_score = num_questions
+        
         # Create a new test record
-        test_record = supabase_manager.create_test(category=main_category or "All Categories")
+        test_record = supabase_manager.create_test(
+            category=main_category or "All Categories",
+            total_score=total_possible_score
+        )
         if not test_record:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -559,8 +570,7 @@ Is Correct: {is_correct}"""
         if request.test_id:
             supabase_manager.update_test_scores(
                 test_id=request.test_id,
-                score=total_score,
-                total_score=total_possible
+                score=total_score
             )
         
         return MultipleChoiceBatchEvaluationResponse(
