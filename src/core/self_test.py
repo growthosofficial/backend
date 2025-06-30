@@ -628,6 +628,7 @@ REQUIREMENTS FOR EACH QUESTION:
 11. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the question text
 12. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
 13. Write clean question text and clean option text without any letter or number prefixes
+14. Refer to the options as "Option A", "Option B", "Option C", "Option D"
 
 Main Category: {main_category}
 Sub Category: {sub_category}

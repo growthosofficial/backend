@@ -319,7 +319,7 @@ def LLMUpdater(input_text: str, existing_knowledge: Optional[Dict], goal: Option
 For options 1 & 2:
 1. Evaluate input relevance to goal (input text relevance to goal should be the same for both options 1 and 2)
 2. Add ONLY goal-relevant content transformation instructions
-3. Include: relevance_score (1-10), goal_alignment, goal_priority (high/medium/low)
+3. Include: relevance_score (0-10), goal_alignment, goal_priority (high/medium/low)
 
 Option 3: Regular semantic approach (no goal bias)
 """
@@ -342,7 +342,7 @@ CRITICAL CATEGORY RULES:
 3. Only create new sub-categories if no similar existing knowledge is found
 
 INSTRUCTIONS:
-1. Evaluate the input's relevance to the goal (if provided) and assign a goal_relevance_score (1-10)
+1. Evaluate the input's relevance to the goal (if provided) and assign a goal_relevance_score (0-10)
 2. Evaluate the input's relevance to the similar existing knowledge (if provided)
 
 SPECIFIC RULES:
@@ -384,7 +384,7 @@ INVALID INSTRUCTIONS (DO NOT USE):
 
 OUTPUT FORMAT (MUST BE VALID JSON):
 {{
- "goal_relevance_score": 1-10,
+ "goal_relevance_score": 0-10,
  "goal_relevance_explanation": "Brief explanation of why this score was assigned",
  "recommendations": [
    {{
