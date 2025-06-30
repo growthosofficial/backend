@@ -311,22 +311,22 @@ def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, pr
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''Assess understanding and provide feedback. Respond with valid JSON only.
-
+    prompt_template = '''Assess the user's understanding and provide constructive feedback. Respond with valid JSON only.
 
 CRITICAL MASTERY GUIDELINES:
-1. Free Text Answer Evaluation:
-   - Good explanations increase mastery, poor answers decrease mastery
-   - "I don't know" responses significantly decrease mastery (0.2-0.3 decrease)
-   - Partial understanding can be recognized in free text answers
+1. Focus on Understanding:
+   - Look for depth of conceptual understanding
+   - Consider ability to explain and connect ideas
+   - Value clear articulation of complex concepts
+   - Recognize partial understanding of difficult topics
 
-2. General Rules:
-   - Recent performance has more weight than older answers
-   - Free text answers have more impact than multiple choice
-   - Consider answer quality and depth of explanation
-   - Look for patterns of understanding vs. misconceptions
+2. Learning Progress:
+   - Recent demonstrations of knowledge carry more weight
+   - Free-form explanations reveal deeper understanding
+   - Look for growth in comprehension over time
+   - Consider both breadth and depth of understanding
 
-Current Mastery: {current_mastery}
+Current Understanding Level: {current_mastery}
 
 Knowledge Content:
 {knowledge_content}
@@ -335,16 +335,15 @@ Question Type: {question_type}
 Question: {new_eval_question}
 Your Answer: {new_eval_answer}
 
-Previous Answers (newest to oldest):
+Previous Learning History (newest to oldest):
 {evaluation_history}
 
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
+    "explanation": "2-3 sentences describing: 1) Demonstrated strengths in understanding 2) Specific concepts that need more focus"
 }}
 '''
-
 
     try:
         # Format evaluation history
@@ -451,31 +450,36 @@ def calculate_multiple_choice_mastery(knowledge_content: str, new_evaluation: Di
     Returns:
         Dictionary with mastery level (0-1) and explanation
     """
-    prompt_template = '''Assess understanding and provide feedback for multiple choice answers. Respond with valid JSON only.
-
+    prompt_template = '''Assess the user's understanding and provide constructive feedback. Respond with valid JSON only.
 
 CRITICAL MASTERY GUIDELINES:
-1 **IMPORTANT: If the current answer is correct, mastery should NEVER decrease (it should be at least the current mastery or higher).**
-2. NO partial credit for wrong answers, even if reasoning shows some understanding
-3. Priotize current evaluation over previous evaluations significantly. Should increase mastery when correct.
-4. Free text answers (if any) should have more impact than multiple choice
-5. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
+1. Understanding Progress:
+   - **IMPORTANT: If the user demonstrates clear understanding, their mastery level should never decrease**
+   - Look for consistent demonstration of concept comprehension
+   - Consider both breadth and accuracy of understanding
+   - Value steady improvement over time
 
-Current Mastery: {current_mastery}
+2. Learning Assessment:
+   - Recent demonstrations of knowledge are most significant
+   - Look for patterns in topic comprehension
+   - Consider overall grasp of interconnected concepts
+   - **IMPORTANT: Strong current understanding should maintain or improve mastery**
+
+Current Understanding Level: {current_mastery}
 
 Knowledge Content:
 {knowledge_content}
 
-Current Evaluation:
+Current Assessment:
 {current_evaluation}
 
-Previous Answers (newest to oldest, free text weighs more than multiple choice):
+Previous Learning History (newest to oldest):
 {evaluation_history}
 
 Response Format:
 {{
     "mastery": <float 0-1>,
-    "explanation": "2-3 sentences describing: 1) Areas of demonstrated understanding 2) Specific concepts needing review"
+    "explanation": "2-3 sentences describing: 1) Areas where understanding is strong 2) Concepts that need reinforcement"
 }}
 '''
 
