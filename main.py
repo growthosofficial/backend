@@ -101,6 +101,7 @@ app.add_middleware(
         "https://frontend-ruby-seven-45.vercel.app",
         "https://frontend-bckh94c82-growthos-projects.vercel.app",
         "https://frontend-rmctsqv7b-growthos-projects.vercel.app",
+        "https://frontend-o4mkr2mon-growthos-projects.vercel.app",    
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
