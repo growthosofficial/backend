@@ -265,7 +265,10 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 mastery_explanation=mastery_result['explanation'],
                 sample_answer=evaluation.get('sample_answer'),
                 is_correct=None,  # Not applicable for free text
-                multiple_choice_question_id=None  # Not applicable for free text
+                multiple_choice_question_id=None,  # Not applicable for free text
+                # Add category fields
+                main_category=knowledge_result.data.get('main_category', 'Unknown'),
+                sub_category=knowledge_result.data.get('sub_category', 'Unknown')
             )
             
             evaluations.append(evaluation_response)
@@ -552,6 +555,9 @@ Is Correct: {is_correct}
                     sample_answer=None,  # No sample answer for multiple choice
                     is_correct=is_correct,
                     multiple_choice_question_id=question['id'],
+                    # Add category fields
+                    main_category=knowledge_item.get('main_category', 'Unknown'),
+                    sub_category=knowledge_item.get('sub_category', 'Unknown'),
                     # Add multiple choice specific fields
                     options=question['options'],
                     selected_index=selected_index,

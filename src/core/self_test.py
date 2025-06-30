@@ -227,9 +227,23 @@ def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content
         sub_category: The sub category (e.g. Quantum Mechanics)
         
     Returns:
-        Dictionary with evaluation results including score (1-5), feedback, etc.
+        Dictionary with evaluation results including score (0-5), feedback, etc.
     """
-    prompt_template = '''You are an evaluator assessing answers to knowledge questions. Respond with valid JSON only.
+    # PRE-CHECK: Immediately score single words, numbers, or irrelevant responses as 0
+    answer_trimmed = answer.strip()
+    if (len(answer_trimmed) <= 3 or 
+        answer_trimmed.isdigit() or 
+        answer_trimmed.lower() in ['yes', 'no', 'ok', 'hi', 'hello', 'test', '1', '2', '3', '4', '5'] or
+        len(answer_trimmed.split()) <= 1):
+        return {
+            "score": 0,
+            "feedback": "Your answer is too brief and does not address the question. Please provide a detailed explanation that demonstrates your understanding of the topic.",
+            "correct_points": [],
+            "incorrect_points": ["Answer too short", "No attempt to address the question", "Single word/number response"],
+            "sample_answer": "A detailed explanation that addresses all parts of the question with examples and analysis."
+        }
+
+    prompt_template = '''You are a VERY STRICT evaluator. You MUST follow these rules exactly.
 
 Main Category: {main_category}
 Sub Category: {sub_category}
@@ -237,41 +251,49 @@ Question: {question}
 Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
-CRITICAL - Initial Checks:
-1. If the answer is irrelevant, off-topic, or just a greeting/single word, score it 1 immediately
-2. If the answer shows no attempt to address the question's specific points, score it 1
-3. Only proceed with detailed evaluation if the answer makes a genuine attempt to address the question
+MANDATORY RULES - You MUST follow these:
+1. If the answer is 3 words or less, score it 0
+2. If the answer is a single number or word, score it 0
+3. If the answer doesn't address the question at all, score it 0
+4. If the answer is just "yes", "no", "ok", "test", or similar, score it 0
+5. Most answers should score 0-3. Only give 4-5 for truly exceptional answers.
 
-CRITICAL - Answer Completeness Check:
-1. First identify ALL parts of what was asked in the question
-2. Check if EACH part was properly addressed in the answer
-3. Example: If question asks "explain X and give example", both parts must be present
-4. Missing ANY major part of the question should result in score ≤ 3
-
-Score the answer on a scale of 1-5 using these strict guidelines:
-1 = Any of these conditions:
-   - Not understood / Incorrect / Completely off-topic
-   - Single word or greeting only
+SCORING RULES (0-5 scale):
+0 = Unacceptable (MUST score 0 for):
+   - Single words, numbers, or very short responses
+   - Completely irrelevant answers
    - No attempt to address the question
-   - Irrelevant response
-2 = Basic understanding but significant parts missing or incorrect
-3 = Moderate understanding, some key parts missing or superficial
-4 = Good understanding with minor gaps or imperfections
-5 = ONLY if ALL of these are true:
-   - ALL parts of the question were fully addressed
-   - ALL explanations are thorough and accurate
-   - ALL requested examples/applications provided
-   - Shows deep understanding beyond basic facts
 
-Also provide a sample answer that would score 5/5.
+1 = Very poor:
+   - Minimal attempt but mostly wrong
+   - Shows no understanding
+
+2 = Poor:
+   - Some attempt but major gaps
+   - Missing most key points
+
+3 = Basic:
+   - Addresses some parts but incomplete
+   - Some correct points with errors
+
+4 = Good (rare):
+   - Addresses most parts correctly
+   - Minor gaps only
+
+5 = Excellent (extremely rare):
+   - ALL parts fully addressed
+   - Deep understanding shown
+   - Critical thinking demonstrated
+
+CRITICAL: The answer "{answer}" appears to be very short. If it's a single word, number, or doesn't address the question, you MUST score it 0.
 
 Format your response as a JSON object with this structure:
 {{
-    "score": <1-5>,
-    "feedback": "Clear explanation of strengths/weaknesses. Use you to refer to the user.",
+    "score": <0-5>,
+    "feedback": "Clear explanation of why this score was given. Be specific about what was missing.",
     "correct_points": ["Point 1", "Point 2"],
     "incorrect_points": ["Missing/wrong point 1", "Missing/wrong point 2"],
-    "sample_answer": "Brief but complete answer showing mastery"
+    "sample_answer": "What a good answer would look like"
 }}'''
 
     try:
@@ -296,21 +318,21 @@ Format your response as a JSON object with this structure:
             if field not in result:
                 print(f"Error: Response missing {field} field")
                 return {
-                    "score": 1,
+                    "score": 0,
                     "feedback": "Error in evaluation response",
                     "correct_points": [],
                     "incorrect_points": ["Error processing response"],
                     "sample_answer": ""
                 }
         
-        # Ensure score is integer 1-5
-        result["score"] = max(1, min(5, int(result["score"])))
+        # Ensure score is integer 0-5
+        result["score"] = max(0, min(5, int(result["score"])))
         return result
         
     except json.JSONDecodeError as e:
         print(f"Error parsing response: {e}")
         return {
-            "score": 1,
+            "score": 0,
             "feedback": f"Error processing response: {str(e)}",
             "correct_points": [],
             "incorrect_points": ["Error processing response"],
@@ -319,7 +341,7 @@ Format your response as a JSON object with this structure:
     except Exception as e:
         print(f"Error in evaluation: {e}")
         return {
-            "score": 1,
+            "score": 0,
             "feedback": f"Error: {str(e)}",
             "correct_points": [],
             "incorrect_points": ["Error processing response"],

@@ -84,9 +84,12 @@ class EvaluationResponse(BaseModel):
     mastery: float
     previous_mastery: float  # Add previous mastery level
     mastery_explanation: str
-    sample_answer: Optional[str] = None  # Only for free text answers
-    is_correct: Optional[bool] = None  # Only for multiple choice
-    multiple_choice_question_id: Optional[int] = None  # Only for multiple choice
+    sample_answer: str | None = None
+    is_correct: bool | None = None
+    multiple_choice_question_id: int | None = None
+    # Category fields
+    main_category: str | None = None
+    sub_category: str | None = None
     # Multiple choice specific fields
     options: Optional[List[str]] = None
     selected_index: Optional[int] = None
