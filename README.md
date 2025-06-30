@@ -264,7 +264,8 @@ CREATE TABLE evaluations (
     feedback TEXT NOT NULL,
     correct_points TEXT[] DEFAULT '{}',
     incorrect_points TEXT[] DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
@@ -441,6 +442,7 @@ The system uses an optimized two-phase approach for category mapping:
 **Phase 2**: System maps sub-categories to main categories via semantic similarity
 
 This optimization provides:
+
 - **30-50% faster LLM generation** (simplified tasks)
 - **200-300 token savings** per request (no category list in prompt)
 - **More accurate categorization** (semantic matching vs LLM guessing)
@@ -457,14 +459,15 @@ The system automatically pre-computes main category embeddings on first startup:
 The system creates `main_category_embeddings.pkl` with pre-computed embeddings for all academic categories.
 
 **Benefits:**
+
 - First user interaction is fast (no embedding computation delay)
 - Consistent performance across all requests
 - Automatic fallback to keyword matching if embeddings unavailable
 
 ### Performance Comparison
 
-| Scenario | First Interaction | Subsequent Interactions | Accuracy |
-|----------|-------------------|------------------------|----------|
-| **Without Pre-computation** | ~10-15 seconds | ~2-3 seconds | High |
-| **With Pre-computation** | ~2-3 seconds | ~2-3 seconds | High |
-| **Fallback Mode** | ~1-2 seconds | ~1-2 seconds | Medium |
+| Scenario                    | First Interaction | Subsequent Interactions | Accuracy |
+| --------------------------- | ----------------- | ----------------------- | -------- |
+| **Without Pre-computation** | ~10-15 seconds    | ~2-3 seconds            | High     |
+| **With Pre-computation**    | ~2-3 seconds      | ~2-3 seconds            | High     |
+| **Fallback Mode**           | ~1-2 seconds      | ~1-2 seconds            | Medium   |

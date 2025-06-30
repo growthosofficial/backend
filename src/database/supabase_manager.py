@@ -345,12 +345,13 @@ class SupabaseManager:
         
         return category_analysis
 
-    def update_mastery(self, knowledge_id: int, evaluation_id: int | None, mastery: float, mastery_explanation: str = "") -> None:
+    def update_mastery(self, knowledge_id: int, evaluation_ids: List[int] | None, mastery: float, mastery_explanation: str = "") -> None:
         """
-        Update the mastery level and explanation of a knowledge item
+        Update the mastery level and explanation of a knowledge item and associated evaluations
         
         Args:
             knowledge_id: ID of the knowledge item
+            evaluation_ids: List of evaluation IDs to update (can be None)
             mastery: Mastery level between 0 and 1
             mastery_explanation: Explanation of how the mastery was calculated
         """
@@ -358,6 +359,7 @@ class SupabaseManager:
             mastery = max(0, min(1, mastery))
             mastery = round(mastery, 2)
             
+            # Update knowledge item mastery
             self.supabase.table('knowledge_items')\
                 .update({
                     'mastery': mastery,
@@ -366,14 +368,16 @@ class SupabaseManager:
                 .eq('id', knowledge_id)\
                 .execute()
             
-            if evaluation_id:
-                self.supabase.table('evaluations')\
-                    .update({
-                        'mastery': mastery,
-                        'mastery_explanation': mastery_explanation
-                    })\
-                    .eq('id', evaluation_id)\
-                    .execute()
+            # Update all associated evaluations if evaluation_ids provided
+            if evaluation_ids:
+                for evaluation_id in evaluation_ids:
+                    self.supabase.table('evaluations')\
+                        .update({
+                            'mastery': mastery,
+                            'mastery_explanation': mastery_explanation
+                        })\
+                        .eq('id', evaluation_id)\
+                        .execute()
                 
         except Exception as e:
             print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
@@ -425,6 +429,35 @@ class SupabaseManager:
         except Exception as e:
             print(f"Error in create_evaluation: {e}")
             return None
+
+    def create_evaluations_batch(self, evaluations_data: List[Dict]) -> List[Dict[str, Any]]:
+        """
+        Create multiple evaluation records in batch
+        
+        Args:
+            evaluations_data: List of evaluation data dictionaries, each containing:
+                - knowledge_id: ID of the knowledge item being evaluated
+                - evaluation_group_id: Optional ID of the evaluation group this belongs to
+                - question_text: The question text
+                - answer_text: User's answer text
+                - feedback: Feedback on the answers
+                - score: Points earned
+                - is_correct: Whether the answer was correct
+                - question_type: Type of question (FREE_TEXT or MULTIPLE_CHOICE)
+                - multiple_choice_question_id: ID of multiple choice question (if applicable)
+                - correct_answer_index: Index of correct answer (if applicable)
+            
+        Returns:
+            List of created evaluation records
+        """
+        try:
+            # Insert all evaluations in one batch
+            result = self.supabase.table('evaluations').insert(evaluations_data).execute()
+            return result.data if result.data else []
+            
+        except Exception as e:
+            print(f"Error creating evaluations batch: {e}")
+            return []
 
     def get_evaluations(self, knowledge_id: int) -> List[Dict]:
         """
@@ -533,8 +566,6 @@ class SupabaseManager:
         """
         try:
             data = {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "category": category,
                 "score": 0,
                 "total_score": total_score

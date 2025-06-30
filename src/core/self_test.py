@@ -426,6 +426,24 @@ Example responses:
             
             result["mastery"] = float(result["mastery"])
             result["mastery"] = max(0, min(1, result["mastery"]))
+            
+            # Safeguard: If more answers are correct than wrong, mastery should not decrease
+            current_eval_text = new_evaluation.get('answer_text', '')
+            if 'Overall:' in current_eval_text:
+                try:
+                    # Extract the overall score (e.g., "Overall: 2/3 correct")
+                    overall_line = [line for line in current_eval_text.split('\n') if 'Overall:' in line][0]
+                    correct_count = int(overall_line.split('/')[0].split(':')[1].strip())
+                    total_count = int(overall_line.split('/')[1].split()[0].strip())
+                    wrong_count = total_count - correct_count
+                    
+                    # If more correct than wrong, ensure mastery doesn't decrease
+                    if correct_count > wrong_count and result["mastery"] < current_mastery:
+                        result["mastery"] = max(current_mastery, result["mastery"])
+                        result["explanation"] = f"Adjusted: {result['explanation']} (Mastery maintained due to more correct answers than wrong answers)"
+                except (IndexError, ValueError):
+                    # If we can't parse the score, continue with the calculated mastery
+                    pass
 
             return result
             
@@ -467,14 +485,17 @@ Current Mastery: {current_mastery}
 CRITICAL MASTERY GUIDELINES:
 1. Multiple choice answers are binary - either fully correct or wrong
 2. NO partial credit for wrong answers, even if reasoning shows some understanding
-3. Wrong answers should DECREASE mastery more significantly than correct answers increase it
-4. Mastery calculation rules:
+3. Mastery calculation rules:
+   - If more answers are correct than wrong: mastery should INCREASE or stay the same
+   - If more answers are wrong than correct: mastery should DECREASE
+   - If equal correct/wrong: mastery should stay the same or increase slightly
+   - Each correct answer should increase mastery by 0.05-0.15
    - Each wrong answer should decrease mastery by 0.1-0.2
-   - Each correct answer should increase mastery by 0.05-0.1
    - Multiple consecutive correct answers needed to show mastery
    - A single wrong answer indicates gaps in understanding
-5. Recent performance has more weight than older answers
-6. Free text answers (if any) should have more impact than multiple choice
+4. Recent performance has more weight than older answers
+5. Free text answers (if any) should have more impact than multiple choice
+6. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
 
 Knowledge Content:
 {knowledge_content}
@@ -554,6 +575,24 @@ Overall Feedback:
             
             result["mastery"] = float(result["mastery"])
             result["mastery"] = max(0, min(1, result["mastery"]))
+            
+            # Safeguard: If more answers are correct than wrong, mastery should not decrease
+            current_eval_text = new_evaluation.get('answer_text', '')
+            if 'Overall:' in current_eval_text:
+                try:
+                    # Extract the overall score (e.g., "Overall: 2/3 correct")
+                    overall_line = [line for line in current_eval_text.split('\n') if 'Overall:' in line][0]
+                    correct_count = int(overall_line.split('/')[0].split(':')[1].strip())
+                    total_count = int(overall_line.split('/')[1].split()[0].strip())
+                    wrong_count = total_count - correct_count
+                    
+                    # If more correct than wrong, ensure mastery doesn't decrease
+                    if correct_count > wrong_count and result["mastery"] < current_mastery:
+                        result["mastery"] = max(current_mastery, result["mastery"])
+                        result["explanation"] = f"Adjusted: {result['explanation']} (Mastery maintained due to more correct answers than wrong answers)"
+                except (IndexError, ValueError):
+                    # If we can't parse the score, continue with the calculated mastery
+                    pass
 
             return result
             
@@ -607,6 +646,9 @@ REQUIREMENTS FOR EACH QUESTION:
 8. Other options should be plausible but clearly wrong
 9. Questions should be diverse and cover different aspects of the content
 10. Avoid redundant or very similar questions
+11. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the question text
+12. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
+13. Write clean question text and clean option text without any letter or number prefixes
 
 Main Category: {main_category}
 Sub Category: {sub_category}

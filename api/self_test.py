@@ -257,7 +257,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 # Update knowledge item mastery and explanation
                 supabase_manager.update_mastery(
                     knowledge_id=answer_request.knowledge_id,
-                    evaluation_id=stored_eval['id'] if stored_eval else None,
+                    evaluation_ids=[stored_eval['id']] if stored_eval else None,
                     mastery=mastery_result['mastery'],
                     mastery_explanation=mastery_result['explanation']
                 )
@@ -443,14 +443,15 @@ async def generate_multiple_choice_questions(
 async def evaluate_multiple_choice_answers(request: MultipleChoiceBatchAnswerRequest):
     """
     Evaluate a batch of multiple choice answers.
-    Updates mastery levels for each knowledge item based on evaluation.
+    Groups evaluations by knowledge ID and batch calculates mastery for each knowledge item.
     
     This endpoint:
     1. Retrieves questions and knowledge items
     2. Evaluates answers against correct answers
-    3. Calculates and updates mastery levels
-    4. Updates test scores (each correct answer = 1 point, wrong = 0, total possible = 1 per question)
-    5. Returns evaluation results
+    3. Groups evaluations by knowledge ID
+    4. Batch calculates and updates mastery levels for each knowledge item
+    5. Updates test scores (each correct answer = 1 point, wrong = 0, total possible = 1 per question)
+    6. Returns evaluation results
     """
     try:
         # Get all question IDs and knowledge IDs
@@ -485,87 +486,155 @@ async def evaluate_multiple_choice_answers(request: MultipleChoiceBatchAnswerReq
             test_id=request.test_id
         )
         
-        # Process each answer
+        # Group answers by knowledge ID for batch processing
+        knowledge_answers = {}
+        for i, answer_request in enumerate(request.answers):
+            knowledge_id = answer_request.knowledge_id
+            if knowledge_id not in knowledge_answers:
+                knowledge_answers[knowledge_id] = []
+            knowledge_answers[knowledge_id].append({
+                'answer_request': answer_request,
+                'group_index': i,
+                'question': question_map.get(answer_request.question_id),
+                'knowledge_item': knowledge_map.get(knowledge_id)
+            })
+        
+        # Process each knowledge item's answers
         all_evaluations = []
         total_score = 0
         total_possible = len(request.answers)  # Each multiple choice is worth 1 point
         
-        for i, answer_request in enumerate(request.answers):
-            question = question_map.get(answer_request.question_id)
-            knowledge_item = knowledge_map.get(answer_request.knowledge_id)
-            
-            if not question or not knowledge_item:
+        # Store all evaluations first, then batch update mastery
+        stored_evaluations = []
+        
+        for knowledge_id, answers_data in knowledge_answers.items():
+            knowledge_item = knowledge_map.get(knowledge_id)
+            if not knowledge_item:
                 continue
                 
-            # Check if answer is correct
-            is_correct = answer_request.selected_answer_index == question['correct_answer_index']
-            if is_correct:
-                total_score += 1  # 1 point for correct answer, 0 for wrong
+            # Process each answer for this knowledge item
+            knowledge_evaluations = []
+            knowledge_score = 0
             
-            # Format answer text for evaluation
-            answer_text = f"""Question: {question['question_text']}
+            for answer_data in answers_data:
+                answer_request = answer_data['answer_request']
+                question = answer_data['question']
+                group_index = answer_data['group_index']
+                
+                if not question:
+                    continue
+                    
+                # Check if answer is correct
+                is_correct = answer_request.selected_answer_index == question['correct_answer_index']
+                if is_correct:
+                    total_score += 1  # 1 point for correct answer, 0 for wrong
+                    knowledge_score += 1
+                
+                # Format answer text for evaluation
+                answer_text = f"""Question: {question['question_text']}
 Selected Answer: {question['options'][answer_request.selected_answer_index]}
 Correct Answer: {question['options'][question['correct_answer_index']]}
 Is Correct: {is_correct}"""
-            
-            # Get previous evaluations for this knowledge item
-            previous_evaluations = knowledge_evaluations_map.get(answer_request.knowledge_id, [])
-            
-            # Calculate mastery
-            current_mastery = knowledge_item.get('mastery', 0.0)
-            mastery_result = calculate_multiple_choice_mastery(
-                knowledge_content=knowledge_item['content'],
-                new_evaluation={
+                
+                # Store evaluation data for later processing
+                evaluation_data = {
+                    'knowledge_id': answer_request.knowledge_id,
                     'question_text': question['question_text'],
                     'answer_text': answer_text,
+                    'feedback': question['explanation'],
                     'is_correct': is_correct,
+                    'score': 1 if is_correct else 0,  # Store binary score in database
+                    'question_type': QuestionType.MULTIPLE_CHOICE,
+                    'evaluation_group_id': evaluation_groups[group_index]['id'] if evaluation_groups else None,
+                    'multiple_choice_question_id': question['id'],
+                    'correct_answer_index': question['correct_answer_index']
+                }
+                
+                # Store additional data for processing (not for database)
+                processing_data = {
+                    'evaluation_data': evaluation_data,
+                    'question': question,
+                    'answer_request': answer_request,
+                    'knowledge_item': knowledge_item
+                }
+                
+                stored_evaluations.append(processing_data)
+                knowledge_evaluations.append(processing_data)
+            
+            # Batch calculate mastery for this knowledge item
+            if knowledge_evaluations:
+                current_mastery = knowledge_item.get('mastery', 0.0)
+                previous_evaluations = knowledge_evaluations_map.get(knowledge_id, [])
+                
+                # Create combined evaluation for mastery calculation
+                combined_questions_text = []
+                for eval_data in knowledge_evaluations:
+                    question = eval_data['question']
+                    answer_request = eval_data['answer_request']
+                    is_correct = eval_data['evaluation_data']['is_correct']
+                    
+                    question_text = f"Q: {question['question_text']}\n"
+                    question_text += f"A: {question['options'][answer_request.selected_answer_index]}\n"
+                    question_text += f"Correct: {question['options'][question['correct_answer_index']]}\n"
+                    question_text += f"Result: {'✓' if is_correct else '✗'}\n"
+                    combined_questions_text.append(question_text)
+                
+                combined_evaluation = {
+                    'question_text': f"Multiple choice assessment ({len(knowledge_evaluations)} questions)",
+                    'answer_text': f"Performance Summary:\n{''.join(combined_questions_text)}\nOverall: {knowledge_score}/{len(knowledge_evaluations)} correct",
+                    'is_correct': knowledge_score == len(knowledge_evaluations),  # Perfect score
                     'question_type': QuestionType.MULTIPLE_CHOICE
-                },
-                previous_evaluations=previous_evaluations,
-                current_mastery=current_mastery
-            )
-            
-            # Store evaluation
-            stored_eval = supabase_manager.create_evaluation({
-                'knowledge_id': answer_request.knowledge_id,
-                'question_text': question['question_text'],
-                'answer_text': answer_text,
-                'feedback': question['explanation'],
-                'is_correct': is_correct,
-                'score': 1 if is_correct else 0,  # Store binary score in database
-                'question_type': QuestionType.MULTIPLE_CHOICE,
-                'evaluation_group_id': evaluation_groups[i]['id'] if evaluation_groups else None,
-                'multiple_choice_question_id': question['id'],
-                'correct_answer_index': question['correct_answer_index']
-            })
-            
-            if stored_eval:
-                # Update mastery
-                supabase_manager.update_mastery(
-                    knowledge_id=answer_request.knowledge_id,
-                    evaluation_id=stored_eval['id'],
-                    mastery=mastery_result['mastery'],
-                    mastery_explanation=mastery_result['explanation']
+                }
+                
+                mastery_result = calculate_multiple_choice_mastery(
+                    knowledge_content=knowledge_item['content'],
+                    new_evaluation=combined_evaluation,
+                    previous_evaluations=previous_evaluations,
+                    current_mastery=current_mastery
                 )
                 
-                # Create evaluation response
-                evaluation = MultipleChoiceEvaluationDetail(
-                    question_text=question['question_text'],
-                    options=question['options'],
-                    selected_answer_index=answer_request.selected_answer_index,
-                    correct_answer_index=question['correct_answer_index'],
-                    is_correct=is_correct,
-                    feedback=question['explanation'],
-                    evaluation_id=stored_eval['id'],
-                    knowledge_id=answer_request.knowledge_id,
-                    multiple_choice_question_id=question['id'],
-                    mastery=mastery_result['mastery'],
-                    previous_mastery=current_mastery,
-                    mastery_explanation=mastery_result['explanation'],
-                    main_category=knowledge_item.get('main_category', 'Unknown'),
-                    sub_category=knowledge_item.get('sub_category', 'Unknown')
-                )
-                all_evaluations.append(evaluation)
+                # Store all evaluations for this knowledge item
+                evaluations_to_create = []
+                for eval_data in knowledge_evaluations:
+                    evaluations_to_create.append(eval_data['evaluation_data'])
+                
+                # Batch create evaluations
+                stored_evaluations_batch = supabase_manager.create_evaluations_batch(evaluations_to_create)
+                
+                # Create evaluation responses
+                for i, eval_data in enumerate(knowledge_evaluations):
+                    if i < len(stored_evaluations_batch):
+                        stored_eval = stored_evaluations_batch[i]
+                        # Create evaluation response
+                        evaluation = MultipleChoiceEvaluationDetail(
+                            question_text=eval_data['question']['question_text'],
+                            options=eval_data['question']['options'],
+                            selected_answer_index=eval_data['answer_request'].selected_answer_index,
+                            correct_answer_index=eval_data['question']['correct_answer_index'],
+                            is_correct=eval_data['evaluation_data']['is_correct'],
+                            feedback=eval_data['question']['explanation'],
+                            evaluation_id=stored_eval['id'],
+                            knowledge_id=eval_data['evaluation_data']['knowledge_id'],
+                            multiple_choice_question_id=eval_data['question']['id'],
+                            mastery=mastery_result['mastery'],
+                            previous_mastery=current_mastery,
+                            mastery_explanation=mastery_result['explanation'],
+                            main_category=knowledge_item.get('main_category', 'Unknown'),
+                            sub_category=knowledge_item.get('sub_category', 'Unknown')
+                        )
+                        all_evaluations.append(evaluation)
+                
+                # Update mastery for this knowledge item (only once per knowledge item)
+                if all_evaluations:  # Only update if we have stored evaluations
+                    # Get all evaluation IDs for this knowledge item
+                    knowledge_evaluation_ids = [eval_obj.evaluation_id for eval_obj in all_evaluations if eval_obj.knowledge_id == knowledge_id]
+                    
+                    supabase_manager.update_mastery(
+                        knowledge_id=knowledge_id,
+                        evaluation_ids=knowledge_evaluation_ids,  # Pass all evaluation IDs
+                        mastery=mastery_result['mastery'],
+                        mastery_explanation=mastery_result['explanation']
+                    )
         
         # Update test scores if test_id is provided
         if request.test_id:
