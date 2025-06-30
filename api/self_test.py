@@ -21,7 +21,7 @@ from models import (
     BatchAnswerRequest, BatchEvaluationResponse, EvaluationHistoryResponse,
     MultipleChoiceQuestion, GenerateMultipleChoiceResponse, MultipleChoiceQuestionResponse,
     MultipleChoiceAnswerRequest, MultipleChoiceBatchAnswerRequest,
-    MultipleChoiceBatchEvaluationResponse, MultipleChoiceEvaluationDetail
+    MultipleChoiceBatchEvaluationResponse, MultipleChoiceEvaluationDetail, EvaluationGroupResponse
 )
 
 # Create router
@@ -38,15 +38,17 @@ async def generate_free_text_questions(
 ):
     """
     Generate free text questions from the knowledge base.
+    Questions will be distributed evenly across randomly selected knowledge items.
     Questions will be evaluated by ChatGPT later.
     
     This endpoint:
     1. Retrieves random knowledge items from the database
-    2. Uses Azure OpenAI to generate thought-provoking questions
-    3. Returns questions with their knowledge_id for later evaluation
+    2. Distributes total questions evenly across selected items
+    3. Uses Azure OpenAI to generate thought-provoking questions
+    4. Returns questions with their knowledge_id for later evaluation
     
     Args:
-        num_questions: Number of questions to generate (1-20)
+        num_questions: Total number of questions to generate (1-20)
         main_category: Optional main category to filter questions by
     """
     try:
@@ -77,45 +79,48 @@ async def generate_free_text_questions(
                 detail="No knowledge items with valid IDs found"
             )
         
-        # Randomly select items to generate questions from
-        # If we have fewer items than requested questions, we'll generate multiple questions per item
-        if len(valid_items) >= num_questions:
-            # We have enough items, select randomly
-            selected_items = random.sample(valid_items, num_questions)
-        else:
-            # We have fewer items than requested questions
-            # Select all available items and we'll generate multiple questions per item
-            selected_items = valid_items.copy()
+        # Calculate how many knowledge items to use based on total questions
+        # Use at most num_questions items, but at least num_questions/5 items
+        # This ensures 1-5 questions per item while using as many items as reasonable
+        min_items = max(1, num_questions // 5)  # At most 5 questions per item
+        max_items = min(num_questions, len(valid_items))  # At least 1 question per item
+        num_items = random.randint(min_items, max_items)
         
-        # Calculate how many questions to generate per item
-        questions_per_item = max(1, num_questions // len(selected_items))
-        remaining_questions = num_questions % len(selected_items)
-
+        # Randomly select items to generate questions from
+        selected_items = random.sample(valid_items, num_items)
+        
+        # Distribute questions across items
+        # First, give each item the minimum number of questions
+        questions_per_item = [num_questions // num_items] * num_items
+        # Then distribute remaining questions randomly
+        remaining = num_questions - sum(questions_per_item)
+        if remaining > 0:
+            # Randomly select items to receive extra questions
+            lucky_items = random.sample(range(num_items), remaining)
+            for idx in lucky_items:
+                questions_per_item[idx] += 1
+        
         # Generate questions for each selected item
         questions = []
         
-        for i, item in enumerate(selected_items):
-            # Calculate how many questions to generate for this item
-            item_question_count = questions_per_item
-            if i < remaining_questions:
-                item_question_count += 1
-                
+        for item, num_item_questions in zip(selected_items, questions_per_item):
             # Get categories and content
             item_main_category = item.get('main_category', 'Unknown')
             sub_category = item.get('sub_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
-            # Generate multiple questions for this item
-            for _ in range(item_question_count):
-                # Generate question using our dedicated function
-                question_data = generate_free_text_question(
-                    category=item_main_category,  # Pass main category for backwards compatibility
-                    content=content,
-                    knowledge_id=knowledge_id
-                )
-                
-                if question_data:
+            # Generate questions for this item - pass num_questions directly to prompt
+            questions_data = generate_free_text_question(
+                category=item_main_category,
+                content=content,
+                knowledge_id=knowledge_id,
+                num_questions=num_item_questions  # Pass the calculated number for this item
+            )
+            
+            if questions_data:
+                # Process each question in the returned list
+                for question_data in questions_data:
                     # Create Question object
                     question = Question(
                         question_text=question_data['question_text'],
@@ -125,20 +130,15 @@ async def generate_free_text_questions(
                         answer=""
                     )
                     questions.append(question)
-                    
-                    # If we've generated enough questions, break
-                    if len(questions) >= num_questions:
-                        break
-            
-            # If we've generated enough questions, break
-            if len(questions) >= num_questions:
-                break
         
         if not questions:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to generate any valid questions"
             )
+        
+        # Shuffle all questions before returning
+        random.shuffle(questions)
         
         return GenerateQuestionsResponse(
             questions=questions,
@@ -164,35 +164,44 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
     """
     try:
         evaluations = []
-        
-        for answer_request in request.answers:
+
+        knowledge_ids = [answer.knowledge_id for answer in request.answers]
+        knowledges = supabase_manager.load_knowledge_by_ids(knowledge_ids)
+        knowledge_map = {item['id']: item for item in knowledges}
+        knowledge_evaluations = supabase_manager.get_evaluations_by_knowledge_ids(knowledge_ids)
+        knowledge_evaluations_map = {}
+
+        for evaluation in knowledge_evaluations:
+            if evaluation['knowledge_id'] not in knowledge_evaluations_map:
+                knowledge_evaluations_map[evaluation['knowledge_id']] = []
+            knowledge_evaluations_map[evaluation['knowledge_id']].append(evaluation)
+
+        evaluation_groups = supabase_manager.create_evaluation_groups(len(request.answers))
+
+        for i, answer_request in enumerate(request.answers):
             knowledge_id = answer_request.knowledge_id
             
-            # Get knowledge item content and current mastery
-            knowledge_result = supabase_manager.supabase.table('knowledge_items')\
-                .select('content,mastery,main_category,sub_category')\
-                .eq('id', knowledge_id)\
-                .single()\
-                .execute()
-            
-            if not knowledge_result.data:
+            knowledge_result = knowledge_map.get(knowledge_id)
+            if not knowledge_result:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Knowledge item {knowledge_id} not found"
                 )
-            
-            knowledge_content = knowledge_result.data.get('content', '')
-            current_mastery = knowledge_result.data.get('mastery', 0.0)
-            
-            previous_evaluations = supabase_manager.get_evaluations(knowledge_id)
+
+            previous_evaluations = knowledge_evaluations_map.get(knowledge_id)
+            if not previous_evaluations:
+                previous_evaluations = []
+
+            knowledge_content = knowledge_result.get('content', '')
+            current_mastery = knowledge_result.get('mastery', 0.0)
             
             # Evaluate the answer
             evaluation = evaluate_free_text_answer(
                 question_text=answer_request.question_text,
                 answer=answer_request.answer,
                 knowledge_content=knowledge_content,
-                main_category=knowledge_result.data.get('main_category', 'Unknown'),
-                sub_category=knowledge_result.data.get('sub_category', 'Unknown')
+                main_category=knowledge_result.get('main_category', 'Unknown'),
+                sub_category=knowledge_result.get('sub_category', 'Unknown')
             )
             
             # Store evaluation in database
@@ -205,7 +214,8 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 "correct_points": evaluation['correct_points'],
                 "incorrect_points": evaluation['incorrect_points'],
                 "question_type": QuestionType.FREE_TEXT,
-                "sample_answer": evaluation.get('sample_answer')
+                "sample_answer": evaluation.get('sample_answer'),
+                "evaluation_group_id": evaluation_groups[i]['id']
             }
             
             stored_eval = supabase_manager.create_evaluation(evaluation_data)
@@ -225,6 +235,9 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 previous_evaluations=previous_evaluations,
                 current_mastery=current_mastery
             )
+
+            if stored_eval:
+                previous_evaluations.append(stored_eval)
             
             # Update knowledge item mastery and explanation
             supabase_manager.update_mastery(
@@ -233,7 +246,10 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 mastery=mastery_result['mastery'],
                 mastery_explanation=mastery_result['explanation']
             )
-            
+
+            knowledge_map[knowledge_id]['mastery'] = mastery_result['mastery']
+            knowledge_map[knowledge_id]['mastery_explanation'] = mastery_result['explanation']
+
             # Create evaluation response
             evaluation_response = EvaluationResponse(
                 question_text=answer_request.question_text,
@@ -245,6 +261,7 @@ async def evaluate_free_text_answers(request: BatchAnswerRequest):
                 evaluation_id=stored_eval['id'] if stored_eval else None,
                 knowledge_id=knowledge_id,
                 mastery=mastery_result['mastery'],
+                previous_mastery=current_mastery,
                 mastery_explanation=mastery_result['explanation'],
                 sample_answer=evaluation.get('sample_answer'),
                 is_correct=None,  # Not applicable for free text
@@ -343,6 +360,7 @@ async def generate_multiple_choice_questions(
         for item, num_item_questions in zip(selected_items, questions_per_item):
             # Get categories and content
             item_main_category = item.get('main_category', 'Unknown')
+            item_sub_category = item.get('sub_category', 'Unknown')
             content = item.get('content', '')
             knowledge_id = item['id']  # Already validated as positive integer
             
@@ -367,7 +385,9 @@ async def generate_multiple_choice_questions(
                         question_text=q['question_text'],
                         options=q['options'],
                         knowledge_id=knowledge_id,
-                        selected_answer_index=0
+                        selected_answer_index=0,
+                        main_category=item_main_category,
+                        sub_category=item_sub_category
                     )
                     all_questions.append(question)
         
@@ -440,7 +460,12 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
         # Process each knowledge group
         all_evaluations = []
         
-        for knowledge_id, answers in knowledge_groups.items():
+        count = len(knowledge_groups)
+        evaluation_groups = supabase_manager.create_evaluation_groups(count)
+
+        print(evaluation_groups)
+
+        for i, (knowledge_id, answers) in enumerate(knowledge_groups.items()):
             knowledge_item = knowledge_map.get(knowledge_id)
             if not knowledge_item:
                 raise HTTPException(
@@ -452,7 +477,7 @@ async def evaluate_multiple_choice_answers_endpoint(request: MultipleChoiceBatch
             
             # Format answers for evaluation
             answer_texts = []
-            for i, answer in enumerate(answers):
+            for answer in answers:
                 question = answer['question']
                 selected_index = answer['selected_index']
                 is_correct = selected_index == question['correct_answer_index']
@@ -508,7 +533,8 @@ Is Correct: {is_correct}
                     "multiple_choice_question_id": question['id'],
                     "mastery": mastery_result['mastery'],  # Add mastery from the calculation
                     "mastery_explanation": mastery_result['explanation'],  # Add mastery explanation,
-                    "correct_answer": question['options'][question['correct_answer_index']]
+                    "correct_answer": question['options'][question['correct_answer_index']],
+                    "evaluation_group_id": evaluation_groups[i]['id']
                 }
                 
                 stored_eval = supabase_manager.create_evaluation(evaluation_data)
@@ -524,6 +550,7 @@ Is Correct: {is_correct}
                     knowledge_id=knowledge_id,
                     evaluation_id=stored_eval['id'] if stored_eval else None,
                     mastery=mastery_result['mastery'],
+                    previous_mastery=knowledge_item.get('mastery', 0.0),  # Add previous mastery
                     mastery_explanation=mastery_result['explanation'],
                     sample_answer=None,  # No sample answer for multiple choice
                     is_correct=is_correct,
@@ -571,7 +598,7 @@ async def get_evaluations_by_knowledge_id(
         limit: Maximum number of evaluations to return (1-100)
         
     Returns:
-        List of evaluations with scores, feedback, and mastery progression
+        List of evaluations grouped by evaluation_group_id
     """
     try:
         # Get knowledge item to verify it exists and get current mastery
@@ -582,18 +609,24 @@ async def get_evaluations_by_knowledge_id(
                 detail=f"Knowledge item {knowledge_id} not found"
             )
         
-        # Get evaluations for this knowledge item
+        # Get evaluations for this knowledge item with evaluation group info
         eval_result = supabase_manager.supabase.table('evaluations')\
-            .select('*')\
+            .select('*, evaluation_group_id')\
             .eq('knowledge_id', knowledge_id)\
             .order('created_at', desc=False)\
             .limit(limit)\
             .execute()
             
-        evaluations = []
+        # Group evaluations by evaluation_group_id
+        grouped_evaluations = {}
         total_score = 0
         
         for eval_data in eval_result.data:
+            group_id = eval_data.get('evaluation_group_id')
+            created_at = eval_data.get('created_at')
+            if not group_id:
+                continue  # Skip evaluations without a group
+                
             evaluation = EvaluationResponse(
                 question_text=eval_data.get('question_text', ''),
                 answer=eval_data.get('answer_text', ''),
@@ -604,27 +637,34 @@ async def get_evaluations_by_knowledge_id(
                 evaluation_id=eval_data.get('id'),
                 knowledge_id=knowledge_id,
                 mastery=eval_data.get('mastery', 0.0),
+                previous_mastery=eval_data.get('previous_mastery', 0.0),
                 mastery_explanation=eval_data.get('mastery_explanation', ''),
                 sample_answer=eval_data.get('sample_answer', None),
                 is_correct=eval_data.get('is_correct'),
                 multiple_choice_question_id=eval_data.get('multiple_choice_question_id')
             )
-            evaluations.append(evaluation)
-            # Only add score to total if it exists (free text answers)
+            
+            if group_id not in grouped_evaluations:
+                grouped_evaluations[group_id] = EvaluationGroupResponse(
+                    evaluation_group_id=group_id,
+                    created_at=created_at,
+                    evaluations=[],
+                    mastery=eval_data.get('mastery', 0.0),
+                    mastery_explanation=eval_data.get('mastery_explanation', '')
+                )
+            grouped_evaluations[group_id].evaluations.append(evaluation)
+            
             if evaluation.score is not None:
                 total_score += evaluation.score
         
-        # Calculate average score only for free text answers
-        scored_evaluations = [e for e in evaluations if e.score is not None]
-        average_score = total_score / len(scored_evaluations) if scored_evaluations else 0
-        
+        #sort by created_at
+        evaluation_groups = sorted(
+            grouped_evaluations.values(),
+            key=lambda x: x.created_at
+        )
+
         return EvaluationHistoryResponse(
-            evaluations=evaluations,
-            knowledge_id=knowledge_id,
-            total_evaluations=len(evaluations),
-            average_score=round(average_score, 2),
-            current_mastery=knowledge_item.get('mastery', 0.0),
-            mastery_explanation=knowledge_item.get('mastery_explanation', '')
+            evaluation_groups=evaluation_groups,
         )
         
     except Exception as e:

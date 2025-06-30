@@ -31,7 +31,7 @@ from models import (
 )
 from config.settings import settings
 from core.similarity import SSC
-from core.llm_updater import LLMUpdater
+from core.llm_updater import LLMUpdater, _EMBEDDINGS_CACHE_FILE, precompute_main_category_embeddings
 from database.supabase_manager import supabase_manager
 from utils.category_mapping import get_all_subject_categories
 from utils.helpers import log_api_call, create_error_response
@@ -56,6 +56,13 @@ async def lifespan(app: FastAPI):
         # Validate settings
         settings.validate()
         logger.info("Configuration validated successfully")
+        
+        # Precompute embeddings if needed
+        if not os.path.exists(_EMBEDDINGS_CACHE_FILE):
+            logger.info("No main category embedding cache found. Precomputing embeddings...")
+            precompute_main_category_embeddings()
+        else:
+            logger.info("Main category embedding cache found. Skipping precompute.")
         
         # Test Supabase connection
         stats = supabase_manager.get_database_stats()
@@ -90,7 +97,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173", 
         "http://localhost:3003",
-        "https://growthos-one.vercel.app" 
+        "https://frontend-axc2vv97r-growthos-projects.vercel.app",
+        "https://frontend-ruby-seven-45.vercel.app",
+        "https://frontend-bckh94c82-growthos-projects.vercel.app",
+        "https://frontend-rmctsqv7b-growthos-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
@@ -177,12 +187,15 @@ async def process_text(request: ProcessTextRequest):
         most_similar = SSC(request.text, request.threshold)
         
         # Step 2: Get AI recommendations with goal context
-        recommendations_raw = LLMUpdater(
+        llm_result = LLMUpdater(
             input_text=request.text, 
             existing_knowledge=most_similar, 
             goal=request.goal,  # Pass the goal parameter
             llm_type="azure_openai"
         )
+        recommendations_raw = llm_result.get("recommendations", [])
+        goal_relevance_score = llm_result.get("goal_relevance_score", None)
+        goal_relevance_explanation = llm_result.get("goal_relevance_explanation", None)
         
         # Step 3: Format recommendations for frontend
         formatted_recommendations = []
@@ -190,42 +203,22 @@ async def process_text(request: ProcessTextRequest):
             recommendation = RecommendationResponse(
                 option_number=rec['option_number'],
                 change=rec['change'],
-                updated_text=rec['updated_text'],
-                main_category=rec['main_category'],
-                sub_category=rec['sub_category'],
+                instructions=rec['instructions'],
+                main_category=rec['main_category'] or "General Studies",
+                sub_category=rec['sub_category'] or "General",
                 tags=rec.get('tags', []),
-                preview=rec['preview'],
-                action_type=rec['action_type'],
-                reasoning=rec['reasoning'],
-                semantic_coherence=rec['semantic_coherence'],
-                is_goal_aware=rec['is_goal_aware']
+                action_type=rec['action_type']
             )
-            
-            # Add goal-specific fields if present
-            if rec.get('is_goal_aware') and request.goal:
-                recommendation.relevance_score = rec.get('relevance_score')
-                recommendation.goal_alignment = rec.get('goal_alignment')
-                recommendation.goal_priority = rec.get('goal_priority')
-            
             formatted_recommendations.append(recommendation)
-        
-        # Generate goal summary if goal was provided
-        goal_summary = None
-        if request.goal:
-            goal_aware_recs = [r for r in recommendations_raw if r.get('is_goal_aware')]
-            if goal_aware_recs:
-                avg_relevance = sum(r.get('relevance_score', 5) for r in goal_aware_recs) / len(goal_aware_recs)
-                high_priority_count = sum(1 for r in goal_aware_recs if r.get('goal_priority') == 'high')
-                high_coherence_count = sum(1 for r in recommendations_raw if r.get('semantic_coherence') == 'high')
-                goal_summary = f"Goal relevance: {avg_relevance:.1f}/10 avg. {high_priority_count} high-priority, {high_coherence_count} high-coherence recommendations."
         
         return ProcessTextResponse(
             recommendations=formatted_recommendations,
-            similar_main_category=most_similar['main_category'] if most_similar else None,
-            similar_sub_category=most_similar['sub_category'] if most_similar else None,
-            similarity_score=most_similar['similarity_score'] if most_similar else None,
+            similar_main_category=most_similar['main_category'] if most_similar and most_similar.get('main_category') else None,
+            similar_sub_category=most_similar['sub_category'] if most_similar and most_similar.get('sub_category') else None,
+            similarity_score=most_similar['similarity_score'] if most_similar and most_similar.get('similarity_score') is not None else None,
             goal_provided=bool(request.goal),
-            goal_summary=goal_summary,
+            goal_relevance_score=goal_relevance_score,
+            goal_relevance_explanation=goal_relevance_explanation,
             status="success"
         )
     
@@ -349,20 +342,20 @@ async def get_all_knowledge():
         result = []
         for item in items:
             item_data = KnowledgeItemResponse(
-                id=item.get('id'),
-                main_category=item.get('main_category', 'General Studies'),
-                sub_category=item.get('sub_category', 'unknown'),
+                id=item.get('id', 0) or 0,
+                main_category=item.get('main_category', 'General Studies') or 'General Studies',
+                sub_category=item.get('sub_category', 'General') or 'General',
                 content=item.get('content', ''),
                 tags=item.get('tags', []),
                 source=item.get('source', 'text'),
-                strength_score=item.get('strength_score'),
-                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
-                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
-                review_count=item.get('review_count', 0),
-                ease_factor=item.get('ease_factor', 2.5),
-                interval_days=item.get('interval_days', 1),
-                created_at=datetime.fromisoformat(item['created_at']),
-                last_updated=datetime.fromisoformat(item['last_updated'])
+                strength_score=item.get('strength_score', None),
+                last_reviewed=item.get('last_reviewed', None),
+                next_review_due=item.get('next_review_due', None),
+                review_count=item.get('review_count', 0) or 0,
+                ease_factor=item.get('ease_factor', 2.5) or 2.5,
+                interval_days=item.get('interval_days', 1) or 1,
+                created_at=item.get('created_at', datetime.now()),
+                last_updated=item.get('last_updated', datetime.now())
             )
             result.append(item_data)
         
@@ -393,20 +386,20 @@ async def get_knowledge_by_category(main_category: str):
         result = []
         for item in items:
             item_data = KnowledgeItemResponse(
-                id=item.get('id'),
-                main_category=item.get('main_category'),
-                sub_category=item.get('sub_category'),
+                id=item.get('id', 0) or 0,
+                main_category=item.get('main_category', 'General Studies') or 'General Studies',
+                sub_category=item.get('sub_category', 'General') or 'General',
                 content=item.get('content', ''),
                 tags=item.get('tags', []),
                 source=item.get('source', 'text'),
-                strength_score=item.get('strength_score'),
-                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
-                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
-                review_count=item.get('review_count', 0),
-                ease_factor=item.get('ease_factor', 2.5),
-                interval_days=item.get('interval_days', 1),
-                created_at=datetime.fromisoformat(item['created_at']),
-                last_updated=datetime.fromisoformat(item['last_updated'])
+                strength_score=item.get('strength_score', None),
+                last_reviewed=item.get('last_reviewed', None),
+                next_review_due=item.get('next_review_due', None),
+                review_count=item.get('review_count', 0) or 0,
+                ease_factor=item.get('ease_factor', 2.5) or 2.5,
+                interval_days=item.get('interval_days', 1) or 1,
+                created_at=item.get('created_at', datetime.now()),
+                last_updated=item.get('last_updated', datetime.now())
             )
             result.append(item_data)
         
@@ -441,20 +434,20 @@ async def search_knowledge(
         result = []
         for item in items:
             item_data = KnowledgeItemResponse(
-                id=item.get('id'),
-                main_category=item.get('main_category'),
-                sub_category=item.get('sub_category'),
+                id=item.get('id', 0) or 0,
+                main_category=item.get('main_category', 'General Studies') or 'General Studies',
+                sub_category=item.get('sub_category', 'General') or 'General',
                 content=item.get('content', ''),
                 tags=item.get('tags', []),
                 source=item.get('source', 'text'),
-                strength_score=item.get('strength_score'),
-                last_reviewed=datetime.fromisoformat(item['last_reviewed']) if item.get('last_reviewed') else None,
-                next_review_due=datetime.fromisoformat(item['next_review_due']) if item.get('next_review_due') else None,
-                review_count=item.get('review_count', 0),
-                ease_factor=item.get('ease_factor', 2.5),
-                interval_days=item.get('interval_days', 1),
-                created_at=datetime.fromisoformat(item['created_at']),
-                last_updated=datetime.fromisoformat(item['last_updated'])
+                strength_score=item.get('strength_score', None),
+                last_reviewed=item.get('last_reviewed', None),
+                next_review_due=item.get('next_review_due', None),
+                review_count=item.get('review_count', 0) or 0,
+                ease_factor=item.get('ease_factor', 2.5) or 2.5,
+                interval_days=item.get('interval_days', 1) or 1,
+                created_at=item.get('created_at', datetime.now()),
+                last_updated=item.get('last_updated', datetime.now())
             )
             result.append(item_data)
         

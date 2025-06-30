@@ -1,7 +1,7 @@
 import json
 from typing import Any, List, Dict, Optional
 from supabase import create_client, Client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config.settings import settings
 
@@ -377,12 +377,42 @@ class SupabaseManager:
         except Exception as e:
             print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
     
+    def create_evaluation_groups(self, count: int) -> List[Dict[str, Any]]:
+        """
+        Create multiple evaluation groups at once
+        
+        Args:
+            count: Number of evaluation groups to create
+            
+        Returns:
+            List of created evaluation group records
+        """
+        try:
+            records = [{
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            } for _ in range(count)]
+            result = self.supabase.table('evaluation_groups').insert(records).execute()
+            return result.data if result.data else []
+            
+        except Exception as e:
+            print(f"Error creating multiple evaluation groups: {e}")
+            return []
+
     def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
         """
         Create a new evaluation record
         
         Args:
-            evaluation_data: Dictionary containing evaluation data
+            evaluation_data: Dictionary containing evaluation data including:
+                - knowledge_id: ID of the knowledge item being evaluated
+                - evaluation_group_id: Optional ID of the evaluation group this belongs to
+                - questions: List of questions or content
+                - answers: User's answers
+                - feedback: Feedback on the answers
+                - points: Points earned
+                - mastery: Mastery level achieved
+                - mastery_explanation: Explanation of mastery calculation
             
         Returns:
             Created evaluation record or None if failed
@@ -416,6 +446,23 @@ class SupabaseManager:
 
         except Exception as e:
             print(f"Error getting evaluations: {e}")
+            return []
+
+    def get_evaluations_by_knowledge_ids(self, knowledge_ids: List[int]) -> List[Dict]:
+        """
+        Get evaluations by knowledge IDs
+        
+        Args:
+            knowledge_ids: List of knowledge IDs to retrieve
+        """
+        try:
+            result = self.supabase.table('evaluations')\
+                .select('*')\
+                .in_('knowledge_id', knowledge_ids)\
+                .execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting evaluations by knowledge IDs: {e}")
             return []
 
     def create_multiple_choice_questions(self, questions: List[Dict]) -> List[Dict]:

@@ -37,12 +37,14 @@ class MultipleChoiceQuestion(BaseModel):
         return v
 
 class MultipleChoiceQuestionResponse(BaseModel):
-    """Public response model for multiple choice questions (without answers)"""
-    question_id: int = Field(..., description="Database ID of the question")
-    question_text: str = Field(..., description="The question text")
-    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-    selected_answer_index: int | None = Field(None, description="Index of selected option (0-3)")
+    """Response model for multiple choice questions"""
+    question_id: int
+    question_text: str
+    options: List[str]
+    knowledge_id: int
+    selected_answer_index: int = 0
+    main_category: str
+    sub_category: str
 
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""
@@ -73,13 +75,14 @@ class EvaluationResponse(BaseModel):
     """Response model for evaluation results"""
     question_text: str
     answer: str
-    score: float | None = None
+    score: Optional[float] = None  # Score is only for free text answers
     feedback: str
-    correct_points: List[str]
-    incorrect_points: List[str]
-    evaluation_id: int | None = None
+    correct_points: List[str] = []  # Only for free text answers
+    incorrect_points: List[str] = []  # Only for free text answers
+    evaluation_id: Optional[int] = None
     knowledge_id: int
     mastery: float
+    previous_mastery: float  # Add previous mastery level
     mastery_explanation: str
     sample_answer: str | None = None
     is_correct: bool | None = None
@@ -88,9 +91,9 @@ class EvaluationResponse(BaseModel):
     main_category: str | None = None
     sub_category: str | None = None
     # Multiple choice specific fields
-    options: List[str] | None = None
-    selected_index: int | None = None
-    correct_answer_index: int | None = None
+    options: Optional[List[str]] = None
+    selected_index: Optional[int] = None
+    correct_answer_index: Optional[int] = None
 
 class BatchAnswerRequest(BaseModel):
     """Request model for submitting multiple answers"""
@@ -101,15 +104,17 @@ class BatchEvaluationResponse(BaseModel):
     evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
     total_evaluated: int = Field(..., description="Total number of answers evaluated")
 
-class EvaluationHistoryResponse(BaseModel):
-    """Response model for evaluation history"""
+class EvaluationGroupResponse(BaseModel):
+    """Response model for grouped evaluations"""
+    evaluation_group_id: int
     evaluations: List[EvaluationResponse]
-    knowledge_id: int
-    total_evaluations: int
-    average_score: float
-    current_mastery: float
+    created_at: datetime
+    mastery: float
     mastery_explanation: str
 
+class EvaluationHistoryResponse(BaseModel):
+    """Response model for evaluation history"""
+    evaluation_groups: List[EvaluationGroupResponse]
 
 # REQUEST MODELS (for processing only)
 
@@ -123,32 +128,23 @@ class ProcessTextRequest(BaseModel):
 # RESPONSE MODELS (read-only data from database)
 
 class RecommendationResponse(BaseModel):
-    option_number: int = Field(..., description="Recommendation option number (1-4)")
+    option_number: int = Field(..., description="Recommendation option number (1-3)")
     change: str = Field(..., description="Detailed explanation of changes and benefits")
-    updated_text: str = Field(..., description="Complete updated/new text content")
+    instructions: str = Field(..., description="Instructions for how to apply this recommendation to the input text")
     main_category: str = Field(..., description="Main academic category")
     sub_category: str = Field(..., description="Specific sub-category")
     tags: list[str] = Field(default_factory=list, description="Semantic-optimized tags")
-    preview: str = Field(..., description="Short preview of content")
     action_type: str = Field(..., description="Action type: merge/update/create_new")
-    reasoning: str = Field(..., description="Reasoning for this approach")
-    semantic_coherence: str = Field(..., description="Coherence assessment: high/medium/low")
-    is_goal_aware: bool = Field(..., description="Whether this considered the goal")
-    
-    # Goal-specific fields (optional)
-    relevance_score: Optional[int] = Field(None, ge=1, le=10, description="Goal relevance (1-10)")
-    goal_alignment: Optional[str] = Field(None, description="How this aligns with the goal")
-    goal_priority: Optional[str] = Field(None, description="Priority level: high/medium/low")
-
 
 class ProcessTextResponse(BaseModel):
     """Response model for text processing"""
-    recommendations: list[RecommendationResponse] = Field(..., description="List of 4 recommendations")
+    recommendations: list[RecommendationResponse] = Field(..., description="List of 3 recommendations")
     similar_main_category: str | None = Field(None, description="Most similar existing main category")
     similar_sub_category: str | None = Field(None, description="Most similar existing sub-category")
     similarity_score: float | None = Field(None, description="Similarity score if match found")
     goal_provided: bool = Field(..., description="Whether a learning goal was provided")
-    goal_summary: Optional[str] = Field(None, description="Summary of goal relevance analysis")
+    goal_relevance_score: Optional[int] = Field(None, ge=1, le=10, description="Overall goal relevance score (1-10)")
+    goal_relevance_explanation: Optional[str] = Field(None, description="Brief explanation of the goal relevance score")
     status: str = Field("success", description="Request status")
 
 
