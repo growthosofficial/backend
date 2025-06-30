@@ -98,8 +98,7 @@ app.add_middleware(
         "https://gregarious-dusk-90c361.netlify.app",
         "https://frontend-ruby-seven-45.vercel.app",
         "https://frontend-bckh94c82-growthos-projects.vercel.app",
-        "https://localhost:3000",
-   ",    
+        "https://localhost:3000",    
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly include OPTIONS
