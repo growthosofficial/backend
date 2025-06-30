@@ -533,8 +533,7 @@ async def evaluate_multiple_choice_answers(request: MultipleChoiceBatchAnswerReq
                 # Format answer text for evaluation
                 answer_text = f"""Question: {question['question_text']}
 Selected Answer: {question['options'][answer_request.selected_answer_index]}
-Correct Answer: {question['options'][question['correct_answer_index']]}
-Is Correct: {is_correct}"""
+Correct Answer: {question['options'][question['correct_answer_index']]}"""
                 
                 # Store evaluation data for later processing
                 evaluation_data = {

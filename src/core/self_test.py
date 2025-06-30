@@ -87,7 +87,6 @@ def format_evaluation_history(evaluations: List[Dict]) -> str:
 Evaluation #{i} - Multiple Choice
 Question: {eval.get('question_text', '')}
 Your Answer: {eval.get('answer_text', '')}
-Correct Answer: {eval.get('correct_answer', '')}
 """
         else:
             eval_history += f"""
@@ -200,19 +199,6 @@ def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content
     Returns:
         Dictionary with evaluation results including score (0-5), feedback, etc.
     """
-    # PRE-CHECK: Immediately score single words, numbers, or irrelevant responses as 0
-    answer_trimmed = answer.strip()
-    if (len(answer_trimmed) <= 3 or 
-        answer_trimmed.isdigit() or 
-        answer_trimmed.lower() in ['yes', 'no', 'ok', 'hi', 'hello', 'test', '1', '2', '3', '4', '5'] or
-        len(answer_trimmed.split()) <= 1):
-        return {
-            "score": 0,
-            "feedback": "Your answer is too brief and does not address the question. Please provide a detailed explanation that demonstrates your understanding of the topic.",
-            "correct_points": [],
-            "incorrect_points": ["Answer too short", "No attempt to address the question", "Single word/number response"],
-            "sample_answer": ""
-        }
 
     prompt_template = '''You are a VERY STRICT evaluator. You MUST follow these rules exactly.
 
