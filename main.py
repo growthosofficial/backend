@@ -99,6 +99,7 @@ app.add_middleware(
         "https://frontend-ruby-seven-45.vercel.app",
         "https://frontend-bckh94c82-growthos-projects.vercel.app",
         "http://localhost:3000",
+        "https://localhost:3000",
         "https://zp1v56uxy8rdx5ypatb0ockcb9tr6a-oci3--3000--6e337437.local-credentialless.webcontainer-api.io/",    
     ],
     allow_credentials=True,
