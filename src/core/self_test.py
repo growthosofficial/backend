@@ -3,8 +3,8 @@ Self-test generation and evaluation using Azure OpenAI for the Second Brain Know
 """
 import json
 import time
-import openai   
-from typing import Dict, Optional, List
+import openai
+from typing import Dict, Optional, List, Any
 import os
 from datetime import datetime
 import random
@@ -13,51 +13,54 @@ from models import QuestionType
 from config.settings import settings
 
 def call_azure_openai(prompt: str, prompt_name: str) -> str:
-    """Call Azure OpenAI API for question generation"""
-    if not settings.AZURE_OPENAI_API_KEY:
-        raise ValueError("AZURE_OPENAI_API_KEY not found")
-    if not settings.AZURE_OPENAI_ENDPOINT:
-        raise ValueError("AZURE_OPENAI_ENDPOINT not found")
-        
-    # Save prompt to file with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{prompt_name.replace(' ', '_')}.txt"
-    filepath = os.path.join("tmp/prompts", filename)
+    """
+    Call Azure OpenAI API with error handling and retries
     
-    # Create directory if it doesn't exist
-    try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        # Save prompt to file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-    except Exception as e:
-        print(f"Warning: Could not save prompt to file: {e}")
-        # Continue without saving the file
+    Args:
+        prompt: The prompt to send to the API
+        prompt_name: Name of the prompt for logging
         
-    # Configure Azure OpenAI client
-    client = openai.AzureOpenAI(
-        api_key=settings.AZURE_OPENAI_API_KEY,
-        api_version=settings.AZURE_OPENAI_API_VERSION,
-        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
-    )
-    
-    start_time = time.time()
+    Returns:
+        Response text from the API
+    """
     try:
+        # Validate required settings
+        if not settings.AZURE_OPENAI_API_KEY:
+            raise ValueError("AZURE_OPENAI_API_KEY not found")
+        if not settings.AZURE_OPENAI_ENDPOINT:
+            raise ValueError("AZURE_OPENAI_ENDPOINT not found")
+        if not settings.AZURE_OPENAI_API_VERSION:
+            raise ValueError("AZURE_OPENAI_API_VERSION not found")
+        if not settings.AZURE_OPENAI_DEPLOYMENT_NAME:
+            raise ValueError("AZURE_OPENAI_DEPLOYMENT_NAME not found")
+        
+        # Configure Azure OpenAI client
+        client = openai.AzureOpenAI(
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
+        )
+        
         response = client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that generates thought-provoking questions for knowledge assessment. Always respond with valid JSON in the specified format."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7
+            temperature=0.7,
         )
-        end_time = time.time()
-        print(f"[TIMING] ⏱️ {prompt_name}: {(end_time - start_time):.2f}s")
+
+        # create file into tmp/prompts with timestamp and prompt_name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{prompt_name.replace(' ', '_')}.txt"
+        filepath = os.path.join("tmp/prompts", filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(prompt)
         
-        content = response.choices[0].message.content
-        if not content:
-            raise ValueError("Empty response from Azure OpenAI")
-        return content
+        if response.choices and response.choices[0].message.content:
+            return response.choices[0].message.content
+            
+        raise ValueError(f"No valid response from Azure OpenAI for {prompt_name}")
         
     except Exception as e:
         print(f"Error calling Azure OpenAI for {prompt_name}: {e}")
@@ -84,7 +87,6 @@ def format_evaluation_history(evaluations: List[Dict]) -> str:
 Evaluation #{i} - Multiple Choice
 Question: {eval.get('question_text', '')}
 Your Answer: {eval.get('answer_text', '')}
-Correct Answer: {eval.get('correct_answer', '')}
 """
         else:
             eval_history += f"""
@@ -96,123 +98,91 @@ Feedback: {eval.get('feedback', '')}
 
     return eval_history
 
-def generate_free_text_question(category: str, content: str, knowledge_id: Optional[int] = None, num_questions: int = 1) -> Optional[List[Dict]]:
+def generate_free_text_questions(
+    knowledge_content: str,
+    main_category: str,
+    sub_category: str,
+    num_questions: int = 3
+) -> Optional[List[Dict[str, Any]]]:
     """
-    Generate thought-provoking free text questions for a given knowledge item
+    Generate multiple free text questions from knowledge content using Azure OpenAI
     
     Args:
-        category: Knowledge category
-        content: Knowledge content to generate question from
-        knowledge_id: Optional ID to analyze past evaluation patterns
-        num_questions: Number of questions to generate (default: 1)
+        knowledge_content: The knowledge content to generate questions from
+        main_category: Main category of the knowledge
+        sub_category: Sub category of the knowledge
+        num_questions: Number of questions to generate (default: 3)
         
     Returns:
-        List of dictionaries with question_text if successful, None if failed
+        List of dictionaries, each containing question text and sample answer
     """
-    evaluation_context = ""
-    if knowledge_id:
-        try:
-            from database.supabase_manager import supabase_manager
-            evaluations = supabase_manager.get_evaluations(knowledge_id)
-            evaluation_context = format_evaluation_history(evaluations)
-        except Exception as e:
-            print(f"Error getting evaluation patterns: {e}")
-            # Continue without evaluation data if there's an error
-            pass
+    try:
+        prompt = f"""You are a knowledgeable tutor creating test questions.
+Generate {num_questions} thought-provoking questions based on this knowledge content.
+Each question should test deep understanding and require detailed explanation.
 
-    # Question generation prompt template
-    prompt_template = '''Generate {num_questions} thought-provoking, open-ended questions based on this knowledge content. 
-Each question should test deep understanding and critical thinking, not just memorization.
-
-Knowledge Category: {category}
-Content: {content}
-
-Previous Answers (newest to oldest):
-{evaluation_context}
-
-QUESTION GENERATION PRIORITIES:
-1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create questions that specifically address these gaps in understanding
-2. SECOND PRIORITY: Look for important concepts in the knowledge content that haven't been covered by the previous questions shown above
-3. Only if no incorrect points or uncovered content: Create questions that approach previously covered concepts from new angles
-
-Requirements for each question:
-1. Focus on the most important concepts in order of relevance to the user's understanding
+REQUIREMENTS FOR EACH QUESTION:
+1. Focus on the most important concepts in order of relevance
 2. Combine multiple related concepts when they naturally fit together
 3. Skip less important details if including them would make the question too complex
-4. Keep the question focused and concise while still being thought-provoking
+4. Keep questions focused and concise while still being thought-provoking
 5. Should require explanation, analysis, or application of concepts
 6. Should not be answerable with just a single word or simple fact
 7. Should encourage connecting ideas and demonstrating understanding
-8. IMPORTANT: Each question should be answerable in about 3 sentences - don't try to cover too many points if it would require a longer explanation
+8. Each question should be answerable in about 3-5 sentences
 9. Questions should be diverse and cover different aspects of the content
 10. Avoid redundant or very similar questions
 
-Example approach:
-- First check the incorrect/missing points from previous answers and prioritize those topics
-- Then scan the knowledge content for important concepts not yet questioned
-- If the content has multiple concepts, pick the 1-2 most important ones that can be explained together concisely
-- If there are examples in the content, use them to ground the question but don't make the question solely about the example
-- If there are technical details, focus on their practical implications rather than memorization
-- Better to have a focused question about key concepts than a broad question trying to cover everything
+Main Category: {main_category}
+Sub Category: {sub_category}
+Knowledge Content:
+{knowledge_content}
 
-Format your response as a JSON object with this structure:
+Respond with valid JSON only, in this format:
 {{
     "questions": [
         {{
-            "question_text": "Your thought-provoking question here that requires deep analysis and understanding..."
+            "question_text": "First thought-provoking question here...",
+            "sample_answer": "A detailed sample answer that would get full marks"
+        }},
+        {{
+            "question_text": "Second thought-provoking question here...",
+            "sample_answer": "Another detailed sample answer"
         }},
         // ... more questions ...
     ]
-}}'''
+}}"""
 
-    try:
-        # Format prompt with actual content
-        prompt = prompt_template.format(
-            category=category,
-            content=content,
-            evaluation_context=evaluation_context,
-            num_questions=num_questions
-        )
+        response = call_azure_openai(prompt, "Free Text Questions Generation")
+        result = json.loads(response)
         
-        # Get response from Azure OpenAI
-        response = call_azure_openai(prompt, "Question Generation")
-        
-        # Parse response
-        response_data = json.loads(response)
-        
-        # Validate response has required field
-        if "questions" not in response_data or not isinstance(response_data["questions"], list):
-            print(f"Error: Response missing questions array for category {category}")
-            print(f"Response content: {response}")
+        # Validate response format
+        if not isinstance(result, dict) or 'questions' not in result:
+            print("Error: Invalid response format - missing 'questions' array")
             return None
             
-        questions_data = []
-        
+        questions = result['questions']
+        if not isinstance(questions, list):
+            print("Error: Invalid response format - 'questions' is not an array")
+            return None
+            
         # Validate each question
-        for question in response_data["questions"]:
-            if "question_text" not in question:
-                print(f"Error: Question missing question_text field for category {category}")
+        valid_questions = []
+        for q in questions:
+            if not isinstance(q, dict) or 'question_text' not in q:
+                print("Error: Invalid question format - missing 'question_text'")
                 continue
                 
-            # Validate question_text is not empty
-            if not question["question_text"] or question["question_text"].strip() == "":
-                print(f"Error: Empty question_text for category {category}")
-                continue
+            # Ensure sample_answer exists
+            if 'sample_answer' not in q:
+                q['sample_answer'] = ''
                 
-            questions_data.append(question)
+            valid_questions.append(q)
+            
+        return valid_questions if valid_questions else None
         
-        # Shuffle the questions before returning
-        if questions_data:
-            random.shuffle(questions_data)
-        
-        return questions_data if questions_data else None
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing question response for category {category}: {e}")
-        print(f"Response content: {response}")
-        return None
     except Exception as e:
-        print(f"Error generating questions for category {category}: {e}")
+        print(f"Error generating free text questions: {e}")
         return None
 
 def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
@@ -227,9 +197,10 @@ def evaluate_free_text_answer(question_text: str, answer: str, knowledge_content
         sub_category: The sub category (e.g. Quantum Mechanics)
         
     Returns:
-        Dictionary with evaluation results including score (1-5), feedback, etc.
+        Dictionary with evaluation results including score (0-5), feedback, etc.
     """
-    prompt_template = '''You are an evaluator assessing answers to knowledge questions. Respond with valid JSON only.
+
+    prompt_template = '''You are a VERY STRICT evaluator. You MUST follow these rules exactly.
 
 Main Category: {main_category}
 Sub Category: {sub_category}
@@ -238,22 +209,23 @@ Answer: {answer}
 Reference Knowledge Content: {knowledge}
 
 CRITICAL - Initial Checks:
-1. If the answer is irrelevant, off-topic, or just a greeting/single word, score it 1 immediately
-2. If the answer shows no attempt to address the question's specific points, score it 1
+1. If the answer is irrelevant, off-topic, or just a greeting/single word, score it 0 immediately
+2. If the answer shows no attempt to address the question's specific points, score it 0
 3. Only proceed with detailed evaluation if the answer makes a genuine attempt to address the question
 
 CRITICAL - Answer Completeness Check:
 1. First identify ALL parts of what was asked in the question
 2. Check if EACH part was properly addressed in the answer
 3. Example: If question asks "explain X and give example", both parts must be present
-4. Missing ANY major part of the question should result in score ≤ 3
+4. Missing ANY major part of the question should result in score ≤ 2
 
-Score the answer on a scale of 1-5 using these strict guidelines:
-1 = Any of these conditions:
+Score the answer on a scale of 0-5 using these strict guidelines:
+0 = Any of these conditions:
    - Not understood / Incorrect / Completely off-topic
    - Single word or greeting only
    - No attempt to address the question
    - Irrelevant response
+1 = Very basic attempt but mostly incorrect or missing key points
 2 = Basic understanding but significant parts missing or incorrect
 3 = Moderate understanding, some key parts missing or superficial
 4 = Good understanding with minor gaps or imperfections
@@ -263,15 +235,15 @@ Score the answer on a scale of 1-5 using these strict guidelines:
    - ALL requested examples/applications provided
    - Shows deep understanding beyond basic facts
 
-Also provide a sample answer that would score 5/5.
+CRITICAL: The answer "{answer}" appears to be very short. If it's a single word, number, or doesn't address the question, you MUST score it 0.
 
 Format your response as a JSON object with this structure:
 {{
-    "score": <1-5>,
+    "score": <0-5>,
     "feedback": "Clear explanation of strengths/weaknesses. Use you to refer to the user.",
     "correct_points": ["Point 1", "Point 2"],
     "incorrect_points": ["Missing/wrong point 1", "Missing/wrong point 2"],
-    "sample_answer": "Brief but complete answer showing mastery"
+    "sample_answer": "What a good answer would look like"
 }}'''
 
     try:
@@ -291,26 +263,26 @@ Format your response as a JSON object with this structure:
         result = json.loads(response)
         
         # Validate evaluation response
-        required_fields = ["score", "feedback", "correct_points", "incorrect_points"]
+        required_fields = ["score", "feedback", "correct_points", "incorrect_points", "sample_answer"]
         for field in required_fields:
             if field not in result:
                 print(f"Error: Response missing {field} field")
                 return {
-                    "score": 1,
+                    "score": 0,
                     "feedback": "Error in evaluation response",
                     "correct_points": [],
                     "incorrect_points": ["Error processing response"],
                     "sample_answer": ""
                 }
         
-        # Ensure score is integer 1-5
-        result["score"] = max(1, min(5, int(result["score"])))
+        # Ensure score is integer 0-5
+        result["score"] = max(0, min(5, int(result["score"])))
         return result
         
     except json.JSONDecodeError as e:
         print(f"Error parsing response: {e}")
         return {
-            "score": 1,
+            "score": 0,
             "feedback": f"Error processing response: {str(e)}",
             "correct_points": [],
             "incorrect_points": ["Error processing response"],
@@ -319,105 +291,11 @@ Format your response as a JSON object with this structure:
     except Exception as e:
         print(f"Error in evaluation: {e}")
         return {
-            "score": 1,
+            "score": 0,
             "feedback": f"Error: {str(e)}",
             "correct_points": [],
             "incorrect_points": ["Error processing response"],
             "sample_answer": ""
-        }
-
-def evaluate_multiple_choice_answers(answers_text: str, knowledge_content: str, main_category: str, sub_category: str) -> Dict:
-    """
-    Evaluate multiple choice answers for a knowledge item using Azure OpenAI
-    
-    Args:
-        answers_text: Formatted text containing questions, selected answers, and correct answers
-        knowledge_content: The knowledge content the questions were based on
-        main_category: The main knowledge category
-        sub_category: The sub category
-        
-    Returns:
-        Dictionary with evaluation results including feedback and array of evaluations
-    """
-    prompt_template = '''You are an evaluator assessing multiple choice answers. Respond with valid JSON only.
-
-Main Category: {main_category}
-Sub Category: {sub_category}
-Knowledge Content: {knowledge}
-
-Multiple Choice Answers:
-{answers}
-
-EVALUATION GUIDELINES:
-1. Analyze each answer individually and provide specific feedback
-2. Identify why the student chose each answer (correct or incorrect)
-3. For incorrect answers, explain the misconception that led to that choice
-4. For correct answers, reinforce the understanding demonstrated
-5. Connect the answers to the core concepts in the knowledge content
-
-Format your response as a JSON object with this structure:
-{{
-    "feedback": "Overall analysis of understanding based on answer patterns. Use you to refer to the user.",
-    "evaluations": [
-        {{
-            "question": "The original question text",
-            "selected_answer": "What the user selected",
-            "is_correct": true/false,
-            "explanation": "Why this answer was chosen and what it reveals about understanding"
-        }},
-        // ... more evaluations ...
-    ]
-}}
-
-Example feedback structure:
-"You demonstrate good understanding of concept X in questions 1 and 3, but seem to have some confusion about Y in question 2. Focus on reviewing the relationship between..."
-
-Example evaluation:
-{{
-    "question": "What is the primary role of mitochondria?",
-    "selected_answer": "Energy production",
-    "is_correct": true,
-    "explanation": "You correctly identified the key function of mitochondria. This shows you understand cellular energy processes."
-}}'''
-
-    try:
-        # Format prompt with actual content
-        prompt = prompt_template.format(
-            answers=answers_text,
-            knowledge=knowledge_content,
-            main_category=main_category,
-            sub_category=sub_category
-        )
-        
-        # Get response from Azure OpenAI
-        response = call_azure_openai(prompt, "Multiple Choice Evaluation")
-        
-        # Parse response
-        result = json.loads(response)
-        
-        # Validate evaluation response
-        required_fields = ["feedback", "evaluations"]
-        for field in required_fields:
-            if field not in result:
-                print(f"Error: Response missing {field} field")
-                return {
-                    "feedback": "Error in evaluation response",
-                    "evaluations": []
-                }
-        
-        return result
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing response: {e}")
-        return {
-            "feedback": f"Error processing response: {str(e)}",
-            "evaluations": []
-        }
-    except Exception as e:
-        print(f"Error in evaluation: {e}")
-        return {
-            "feedback": f"Error: {str(e)}",
-            "evaluations": []
         }
 
 def calculate_free_text_mastery(knowledge_content: str, new_evaluation: Dict, previous_evaluations: List[Dict], current_mastery: float) -> Dict:
@@ -534,6 +412,24 @@ Example responses:
             
             result["mastery"] = float(result["mastery"])
             result["mastery"] = max(0, min(1, result["mastery"]))
+            
+            # Safeguard: If more answers are correct than wrong, mastery should not decrease
+            current_eval_text = new_evaluation.get('answer_text', '')
+            if 'Overall:' in current_eval_text:
+                try:
+                    # Extract the overall score (e.g., "Overall: 2/3 correct")
+                    overall_line = [line for line in current_eval_text.split('\n') if 'Overall:' in line][0]
+                    correct_count = int(overall_line.split('/')[0].split(':')[1].strip())
+                    total_count = int(overall_line.split('/')[1].split()[0].strip())
+                    wrong_count = total_count - correct_count
+                    
+                    # If more correct than wrong, ensure mastery doesn't decrease
+                    if correct_count > wrong_count and result["mastery"] < current_mastery:
+                        result["mastery"] = max(current_mastery, result["mastery"])
+                        result["explanation"] = f"Adjusted: {result['explanation']} (Mastery maintained due to more correct answers than wrong answers)"
+                except (IndexError, ValueError):
+                    # If we can't parse the score, continue with the calculated mastery
+                    pass
 
             return result
             
@@ -575,14 +471,17 @@ Current Mastery: {current_mastery}
 CRITICAL MASTERY GUIDELINES:
 1. Multiple choice answers are binary - either fully correct or wrong
 2. NO partial credit for wrong answers, even if reasoning shows some understanding
-3. Wrong answers should DECREASE mastery more significantly than correct answers increase it
-4. Mastery calculation rules:
+3. Mastery calculation rules:
+   - If more answers are correct than wrong: mastery should INCREASE or stay the same
+   - If more answers are wrong than correct: mastery should DECREASE
+   - If equal correct/wrong: mastery should stay the same or increase slightly
+   - Each correct answer should increase mastery by 0.05-0.15
    - Each wrong answer should decrease mastery by 0.1-0.2
-   - Each correct answer should increase mastery by 0.05-0.1
    - Multiple consecutive correct answers needed to show mastery
    - A single wrong answer indicates gaps in understanding
-5. Recent performance has more weight than older answers
-6. Free text answers (if any) should have more impact than multiple choice
+4. Recent performance has more weight than older answers
+5. Free text answers (if any) should have more impact than multiple choice
+6. IMPORTANT: Mastery should NEVER decrease when the user gets more correct answers than wrong answers
 
 Knowledge Content:
 {knowledge_content}
@@ -662,6 +561,24 @@ Overall Feedback:
             
             result["mastery"] = float(result["mastery"])
             result["mastery"] = max(0, min(1, result["mastery"]))
+            
+            # Safeguard: If more answers are correct than wrong, mastery should not decrease
+            current_eval_text = new_evaluation.get('answer_text', '')
+            if 'Overall:' in current_eval_text:
+                try:
+                    # Extract the overall score (e.g., "Overall: 2/3 correct")
+                    overall_line = [line for line in current_eval_text.split('\n') if 'Overall:' in line][0]
+                    correct_count = int(overall_line.split('/')[0].split(':')[1].strip())
+                    total_count = int(overall_line.split('/')[1].split()[0].strip())
+                    wrong_count = total_count - correct_count
+                    
+                    # If more correct than wrong, ensure mastery doesn't decrease
+                    if correct_count > wrong_count and result["mastery"] < current_mastery:
+                        result["mastery"] = max(current_mastery, result["mastery"])
+                        result["explanation"] = f"Adjusted: {result['explanation']} (Mastery maintained due to more correct answers than wrong answers)"
+                except (IndexError, ValueError):
+                    # If we can't parse the score, continue with the calculated mastery
+                    pass
 
             return result
             
@@ -681,156 +598,110 @@ Overall Feedback:
             "explanation": "Error in LLM analysis, maintaining current mastery level"
         }
 
-def generate_multiple_choice_question(category: str, content: str, knowledge_id: Optional[int] = None, num_questions: int = 1) -> Optional[List[Dict]]:
+def generate_multiple_choice_questions_batch(
+    knowledge_content: str,
+    main_category: str,
+    sub_category: str,
+    num_questions: int = 3
+) -> Optional[List[Dict[str, Any]]]:
     """
-    Generate multiple choice questions for a given knowledge item
+    Generate multiple multiple choice questions from knowledge content using Azure OpenAI
     
     Args:
-        category: Knowledge category
-        content: Knowledge content to generate question from
-        knowledge_id: Optional ID to analyze past evaluation patterns
-        num_questions: Number of questions to generate (default: 1)
+        knowledge_content: The knowledge content to generate questions from
+        main_category: Main category of the knowledge
+        sub_category: Sub category of the knowledge
+        num_questions: Number of questions to generate (default: 3)
         
     Returns:
-        List of dictionaries with question_text, options, correct_answer_index, explanation, and question_id if successful, None if failed
+        List of dictionaries, each containing question text, options, correct answer index, and explanation
     """
-    evaluation_context = ""
-    if knowledge_id:
-        try:
-            from database.supabase_manager import supabase_manager
-            evaluations = supabase_manager.get_evaluations(knowledge_id)
-            evaluation_context = format_evaluation_history(evaluations)
-        except Exception as e:
-            print(f"Error getting evaluation patterns: {e}")
-            pass
+    try:
+        prompt = f"""You are a knowledgeable tutor creating multiple choice test questions.
+Generate {num_questions} thought-provoking questions with 4 options each based on this knowledge content.
+Each question should test deep understanding and have plausible but clearly incorrect distractors.
 
-    prompt_template = '''Generate {num_questions} multiple choice questions based on this knowledge content.
-Each question should test understanding and application, not just memorization.
+REQUIREMENTS FOR EACH QUESTION:
+1. Focus on the most important concepts in order of relevance
+2. Combine multiple related concepts when they naturally fit together
+3. Skip less important details if including them would make the question too complex
+4. Keep questions focused and concise while still being thought-provoking
+5. Should test understanding, analysis, or application of concepts
+6. Each question should have exactly 4 options (A, B, C, D)
+7. Only one option should be clearly correct
+8. Other options should be plausible but clearly wrong
+9. Questions should be diverse and cover different aspects of the content
+10. Avoid redundant or very similar questions
+11. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the question text
+12. DO NOT include "A)", "B)", "C)", "D)" or "1.", "2.", "3.", "4." prefixes in the options array
+13. Write clean question text and clean option text without any letter or number prefixes
 
-Knowledge Category: {category}
-Content: {content}
+Main Category: {main_category}
+Sub Category: {sub_category}
+Knowledge Content:
+{knowledge_content}
 
-Previous Answers (newest to oldest):
-{evaluation_context}
-
-QUESTION GENERATION PRIORITIES:
-1. HIGHEST PRIORITY: If there are incorrect/missing points from previous answers, create questions that specifically address these gaps
-2. SECOND PRIORITY: Look for important concepts that haven't been covered by previous questions
-3. Only if no incorrect points or uncovered content: Create questions that approach previously covered concepts from new angles
-
-Requirements:
-1. Each question should test understanding and application of concepts
-2. Options should be plausible but clearly distinguishable
-3. Include exactly 4 options (indexed 0-3) for each question
-4. One and only one option should be correct per question
-5. Distractors (wrong options) should be:
-   - Plausible but clearly incorrect
-   - Based on common misconceptions
-   - Similar in length and style to correct answer
-   - Not obviously wrong or joke answers
-6. All options should be:
-   - Similar in length
-   - Grammatically consistent with question
-   - Clear and unambiguous
-   - Independent of each other
-7. Questions should be diverse and cover different aspects of the content
-8. Avoid redundant or very similar questions
-
-Format your response as a JSON object with this structure:
+Respond with valid JSON only, in this format:
 {{
     "questions": [
         {{
-            "question_text": "Your thought-provoking multiple choice question here...",
-            "options": [
-                "First option text here",
-                "Second option text here",
-                "Third option text here",
-                "Fourth option text here"
-            ],
-            "correct_answer_index": <number 0-3>,
-            "explanation": "Detailed explanation of why the correct answer is correct and why each distractor is incorrect"
+            "question_text": "First thought-provoking question here...",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correct_answer_index": 0,
+            "explanation": "Detailed explanation of why the correct answer is right and others are wrong"
+        }},
+        {{
+            "question_text": "Second thought-provoking question here...",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correct_answer_index": 2,
+            "explanation": "Another detailed explanation"
         }},
         // ... more questions ...
     ]
-}}'''
+}}"""
 
-    try:
-        # Format prompt with actual content
-        prompt = prompt_template.format(
-            category=category,
-            content=content,
-            evaluation_context=evaluation_context,
-            num_questions=num_questions
-        )
+        response = call_azure_openai(prompt, "Multiple Choice Questions Generation")
+        result = json.loads(response)
         
-        # Get response from Azure OpenAI
-        response = call_azure_openai(prompt, "Multiple Choice Question Generation")
-        
-        # Parse response
-        response_data = json.loads(response)
-        
-        if "questions" not in response_data or not isinstance(response_data["questions"], list):
-            print(f"Error: Response missing questions array for category {category}")
+        # Validate response format
+        if not isinstance(result, dict) or 'questions' not in result:
+            print("Error: Invalid response format - missing 'questions' array")
             return None
             
-        questions_data = []
-        questions_to_store = []
-        
-        # Validate each question
-        for question in response_data["questions"]:
-            # Validate response has required fields
-            required_fields = ["question_text", "options", "correct_answer_index", "explanation"]
-            if not all(field in question for field in required_fields):
-                print(f"Error: Question missing required fields for category {category}")
-                continue
-                
-            # Validate options and correct answer
-            if len(question["options"]) != 4:
-                print(f"Error: Expected 4 options, got {len(question['options'])}")
-                continue
-                
-            if not isinstance(question["correct_answer_index"], int) or \
-               question["correct_answer_index"] < 0 or \
-               question["correct_answer_index"] > 3:
-                print(f"Error: Invalid correct_answer_index: {question['correct_answer_index']}")
-                continue
-                
-            # Add question to list for batch storage
-            if knowledge_id:
-                questions_to_store.append({
-                    "question_text": question["question_text"],
-                    "options": question["options"],
-                    "correct_answer_index": question["correct_answer_index"],
-                    "explanation": question["explanation"],
-                    "knowledge_id": knowledge_id
-                })
+        questions = result['questions']
+        if not isinstance(questions, list):
+            print("Error: Invalid response format - 'questions' is not an array")
+            return None
             
-            questions_data.append(question)
-        
-        # Store questions in batch if we have any valid ones
-        if knowledge_id and questions_to_store:
-            try:
-                from database.supabase_manager import supabase_manager
-                stored_questions = supabase_manager.create_multiple_choice_questions(questions_to_store)
+        # Validate each question
+        valid_questions = []
+        for q in questions:
+            if not isinstance(q, dict) or 'question_text' not in q or 'options' not in q:
+                print("Error: Invalid question format - missing required fields")
+                continue
                 
-                # Update questions_data with database IDs
-                for i, stored_q in enumerate(stored_questions):
-                    if i < len(questions_data):  # Safety check
-                        questions_data[i]["question_id"] = stored_q["id"]
-            except Exception as e:
-                print(f"Error storing multiple choice questions in batch: {e}")
-                # Continue without storing if there's an error
-                pass
+            # Ensure all required fields exist
+            if 'correct_answer_index' not in q:
+                print("Error: Invalid question format - missing 'correct_answer_index'")
+                continue
+                
+            if 'explanation' not in q:
+                q['explanation'] = ''
+                
+            # Validate options array
+            if not isinstance(q['options'], list) or len(q['options']) != 4:
+                print("Error: Invalid question format - must have exactly 4 options")
+                continue
+                
+            # Validate correct_answer_index
+            if not isinstance(q['correct_answer_index'], int) or q['correct_answer_index'] < 0 or q['correct_answer_index'] >= 4:
+                print("Error: Invalid question format - correct_answer_index must be 0-3")
+                continue
+                
+            valid_questions.append(q)
+            
+        return valid_questions if valid_questions else None
         
-        # Shuffle the questions before returning
-        if questions_data:
-            random.shuffle(questions_data)
-        
-        return questions_data if questions_data else None
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing question response for category {category}: {e}")
-        return None
     except Exception as e:
-        print(f"Error generating questions for category {category}: {e}")
+        print(f"Error generating multiple choice questions: {e}")
         return None
