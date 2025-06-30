@@ -286,3 +286,14 @@ class TestListResponse(BaseModel):
     """Response model for list of tests"""
     tests: List[TestResponse] = Field(..., description="List of tests")
     total_tests: int = Field(..., description="Total number of tests returned")
+
+class GoalResponse(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+class GoalsResponse(BaseModel):
+    goals: list[GoalResponse]
+    total_goals: int
+    status: str = Field("success", description="Request status")

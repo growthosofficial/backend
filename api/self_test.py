@@ -752,31 +752,34 @@ async def get_evaluations_by_knowledge_id(
 
 @router.get("/tests", response_model=TestListResponse)
 async def get_latest_tests(
-    limit: int = Query(default=10, ge=1, le=50, description="Maximum number of tests to return"),
-    category: Optional[str] = Query(default=None, description="Optional category to filter by")
+    limit: int = Query(default=1000, ge=1, le=1000, description="Maximum number of tests to return"),
+    category: Optional[str] = Query(default=None, description="Optional category to filter by"),
+    sort_order: str = Query(default="desc", description="Sort order for creation date: 'asc' or 'desc'"),
+    start_date: Optional[str] = Query(default=None, description="Earliest created_at (ISO 8601, e.g. '2024-06-01T00:00:00Z')"),
+    end_date: Optional[str] = Query(default=None, description="Latest created_at (ISO 8601, e.g. '2024-06-30T23:59:59Z')")
 ):
     """
     Get the latest tests with their scores.
-    
     Args:
         limit: Maximum number of tests to return (1-50)
         category: Optional category to filter by
-        
+        sort_order: 'asc' or 'desc' for creation date order (default: 'desc')
+        start_date: Optional ISO 8601 string for earliest created_at
+        end_date: Optional ISO 8601 string for latest created_at
     Returns:
         List of tests with their scores and metadata
     """
     try:
         # Get latest tests from database
-        tests = supabase_manager.get_latest_tests(limit=limit, category=category)
+        tests = supabase_manager.get_latest_tests(limit=limit, category=category, sort_order=sort_order, start_date=start_date, end_date=end_date)
+        print("the category is: ", category)
         if not tests:
             return TestListResponse(tests=[], total_tests=0)
-        
         # Format response
         test_responses = []
         for test in tests:
             # Calculate percentage score
             percentage = (test['score'] / test['total_score'] * 100) if test['total_score'] > 0 else 0
-            
             test_response = TestResponse(
                 id=test['id'],
                 category=test['category'],
@@ -787,12 +790,10 @@ async def get_latest_tests(
                 updated_at=test.get('updated_at') or test['created_at']
             )
             test_responses.append(test_response)
-        
         return TestListResponse(
             tests=test_responses,
             total_tests=len(test_responses)
         )
-        
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

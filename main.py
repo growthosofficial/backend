@@ -27,7 +27,8 @@ from models import (
     ProcessTextRequest, ProcessTextResponse, RecommendationResponse,
     KnowledgeItemResponse, CategoryResponse, CategoriesResponse,
     HealthResponse, StatsResponse, StrengthDistributionResponse, 
-    CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse
+    CategoryStrengthResponse, ItemsDueResponse, SearchResponse, ErrorResponse,
+    GoalsResponse, GoalResponse
 )
 from config.settings import settings
 from core.similarity import SSC
@@ -475,6 +476,28 @@ async def search_knowledge(
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
+@app.get("/api/goals", response_model=GoalsResponse, tags=["Data Retrieval"])
+async def get_goals():
+    """Get all goals (read-only)."""
+    start_time = datetime.now()
+    try:
+        goals_raw = supabase_manager.get_goals()
+        goals = [GoalResponse(**g) for g in goals_raw]
+        response = GoalsResponse(
+            goals=goals,
+            total_goals=len(goals),
+            status="success"
+        )
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/goals", "GET", 200, duration)
+        return response
+    except Exception as e:
+        logger.error(f"Failed to get goals: {e}")
+        duration = (datetime.now() - start_time).total_seconds()
+        log_api_call("/api/goals", "GET", 500, duration)
+        raise HTTPException(status_code=500, detail=f"Failed to get goals: {str(e)}")
+
+
 # ANALYTICS ENDPOINTS
 
 @app.get("/api/analytics/strength-distribution", response_model=StrengthDistributionResponse, tags=["Analytics"])
@@ -587,6 +610,27 @@ async def get_items_due_for_review(limit: int = Query(50, ge=1, le=200, descript
         log_api_call("/api/analytics/items-due", "GET", 500, duration)
         raise HTTPException(status_code=500, detail=f"Failed to get items due for review: {str(e)}")
 
+@app.get("/api/analytics/main-category-distribution", tags=["Analytics"])
+async def get_main_category_distribution():
+    """Get the distribution of knowledge items by main category."""
+    try:
+        distribution = supabase_manager.get_knowledge_item_main_category_distribution()
+        return distribution
+    except Exception as e:
+        logger.error(f"Failed to get main category distribution: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get main category distribution: {str(e)}")
+
+@app.get("/api/analytics/average-mastery", tags=["Analytics"])
+async def get_average_mastery():
+    """Get the average mastery of all knowledge items."""
+    try:
+        average_mastery = supabase_manager.get_average_mastery()
+        return {
+            "average_mastery": average_mastery,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get average mastery: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get average mastery: {str(e)}")
 
 if __name__ == "__main__":
     host = os.getenv("API_HOST", "0.0.0.0")
@@ -606,3 +650,4 @@ if __name__ == "__main__":
         reload=True,
         log_level=os.getenv("LOG_LEVEL", "info").lower()
     )
+
