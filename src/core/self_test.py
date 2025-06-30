@@ -456,8 +456,10 @@ CRITICAL MASTERY GUIDELINES:
 1. Multiple choice answers are binary - either fully correct or wrong
 2. NO partial credit for wrong answers, even if reasoning shows some understanding
 3. Mastery calculation rules:
+- Priotize current evaluation over previous evaluations significantly. Should increase mastery when correct.
 - If current mastery is larger than or equal to 0.5, increase when more correct answers than wrong answers, decrease otherwise.
 - If current mastery is less than 0.5, increase when at least 1 correct answer, decrease otherwise.
+- **IMPORTANT: If the current answer is correct, mastery should NEVER decrease (it should be at least the current mastery or higher).**
 
 4. Recent performance has more weight than older answers
 5. Free text answers (if any) should have more impact than multiple choice
@@ -537,23 +539,6 @@ Overall Feedback:
             result["mastery"] = max(0, min(1, result["mastery"]))
             
             # Safeguard: If more answers are correct than wrong, mastery should not decrease
-            current_eval_text = new_evaluation.get('answer_text', '')
-            if 'Overall:' in current_eval_text:
-                try:
-                    # Extract the overall score (e.g., "Overall: 2/3 correct")
-                    overall_line = [line for line in current_eval_text.split('\n') if 'Overall:' in line][0]
-                    correct_count = int(overall_line.split('/')[0].split(':')[1].strip())
-                    total_count = int(overall_line.split('/')[1].split()[0].strip())
-                    wrong_count = total_count - correct_count
-                    
-                    # If more correct than wrong, ensure mastery doesn't decrease
-                    if correct_count > wrong_count and result["mastery"] < current_mastery:
-                        result["mastery"] = max(current_mastery, result["mastery"])
-                        result["explanation"] = f"Adjusted: {result['explanation']} (Mastery maintained due to more correct answers than wrong answers)"
-                except (IndexError, ValueError):
-                    # If we can't parse the score, continue with the calculated mastery
-                    pass
-
             return result
             
         except Exception as e:
@@ -665,7 +650,7 @@ Respond with valid JSON only, in this format:
             if not isinstance(q['correct_answer_index'], int) or q['correct_answer_index'] < 0 or q['correct_answer_index'] >= 4:
                 print("Error: Invalid question format - correct_answer_index must be 0-3")
                 continue
-                
+
             valid_questions.append(q)
             
         return valid_questions if valid_questions else None
