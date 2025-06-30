@@ -503,6 +503,12 @@ OUTPUT FORMAT (MUST BE VALID JSON):
             action_type = rec.get('action_type', 'create_new')
             sub_category = rec.get('sub_category', 'General')
             
+            # CRITICAL: Always enforce UPDATE threshold first, regardless of other conditions
+            if action_type == 'update' and similarity_score < UPDATE_SIMILARITY_THRESHOLD:
+                print(f"⚠️ BLOCKING UPDATE action_type: {action_type} -> merge (similarity {similarity_score:.3f} < {UPDATE_SIMILARITY_THRESHOLD} threshold)")
+                rec['action_type'] = 'merge'
+                continue  # Skip other validations since we've already fixed this
+            
             # If no similar existing knowledge found, action_type should be create_new
             if not existing_knowledge:
                 if action_type != 'create_new':
@@ -515,7 +521,7 @@ OUTPUT FORMAT (MUST BE VALID JSON):
                     print(f"⚠️ Fixing inconsistent action_type: {action_type} -> create_new (new sub-category)")
                     rec['action_type'] = 'create_new'
             
-            # If using exact existing sub-category, validate action_type based on similarity threshold
+            # If using exact existing sub-category, validate action_type based on instructions
             elif existing_sub_category and sub_category.lower() == existing_sub_category.lower():
                 if action_type == 'create_new':
                     # Determine if it should be merge or update based on instructions
@@ -523,18 +529,14 @@ OUTPUT FORMAT (MUST BE VALID JSON):
                     if 'append' in instructions or 'add' in instructions or 'incorporate' in instructions:
                         new_action_type = 'merge'
                     else:
-                        new_action_type = 'update'
-                    print(f"⚠️ Fixing inconsistent action_type: {action_type} -> {new_action_type} (existing sub-category)")
+                        # Only allow 'update' if similarity is high enough
+                        new_action_type = 'merge' if similarity_score < UPDATE_SIMILARITY_THRESHOLD else 'update'
+                    print(f"⚠️ Fixing inconsistent action_type: {action_type} -> {new_action_type} (existing sub-category, similarity: {similarity_score:.3f})")
                     rec['action_type'] = new_action_type
                 
-                # Additional validation: UPDATE operations require higher similarity threshold
-                elif action_type == 'update' and similarity_score < UPDATE_SIMILARITY_THRESHOLD:
-                    print(f"⚠️ Fixing UPDATE action_type: {action_type} -> merge (similarity {similarity_score:.3f} < {UPDATE_SIMILARITY_THRESHOLD} threshold)")
-                    rec['action_type'] = 'merge'
-                
                 # Log the final action_type decision
-                if action_type in ['merge', 'update']:
-                    print(f"✅ Action type {action_type} validated for similarity {similarity_score:.3f} (threshold: {similarity_threshold})")
+                if rec['action_type'] in ['merge', 'update']:
+                    print(f"✅ Action type {rec['action_type']} validated for similarity {similarity_score:.3f} (threshold: {similarity_threshold})")
         
         print(f"✅ Generated {len(recommendations)} semantic knowledge recommendations")
         if goal:
