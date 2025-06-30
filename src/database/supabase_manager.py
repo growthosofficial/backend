@@ -2,6 +2,7 @@ import json
 from typing import Any, List, Dict, Optional
 from supabase import create_client, Client
 from datetime import datetime, timedelta, timezone
+import random
 
 from config.settings import settings
 
@@ -377,27 +378,27 @@ class SupabaseManager:
         except Exception as e:
             print(f"Error updating mastery for knowledge item {knowledge_id}: {e}")
     
-    def create_evaluation_groups(self, count: int) -> List[Dict[str, Any]]:
+    def create_evaluation_groups(self, count: int, test_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Create multiple evaluation groups at once
+        Create evaluation groups for batch evaluations
         
         Args:
             count: Number of evaluation groups to create
+            test_id: Optional test ID to associate with the groups
             
         Returns:
             List of created evaluation group records
         """
-        try:
-            records = [{
+        groups = []
+        for _ in range(count):
+            data = {
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            } for _ in range(count)]
-            result = self.supabase.table('evaluation_groups').insert(records).execute()
-            return result.data if result.data else []
-            
-        except Exception as e:
-            print(f"Error creating multiple evaluation groups: {e}")
-            return []
+                "test_id": test_id
+            }
+            result = self.supabase.table('evaluation_groups').insert(data).execute()
+            if result.data:
+                groups.append(result.data[0])
+        return groups
 
     def create_evaluation(self, evaluation_data: Dict) -> Optional[Dict[str, Any]]:
         """
@@ -465,26 +466,30 @@ class SupabaseManager:
             print(f"Error getting evaluations by knowledge IDs: {e}")
             return []
 
-    def create_multiple_choice_questions(self, questions: List[Dict]) -> List[Dict]:
+    def create_multiple_choice_questions(self, questions_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Store multiple choice questions in batch
+        Create multiple choice questions in batch
         
         Args:
-            questions: List of dictionaries containing:
+            questions_data: List of question data dictionaries, each containing:
                 - question_text: The question text
-                - options: List of 4 options
-                - correct_answer_index: Index of correct answer (0-3)
-                - explanation: Explanation of answers
+                - options: List of options
+                - correct_answer_index: Index of correct answer
+                - explanation: Explanation of correct answer
                 - knowledge_id: ID of related knowledge item
-                
+            
         Returns:
             List of created question records
         """
         try:
-            if not questions:
-                return []
+            # Add timestamps to each question
+            now = datetime.now(timezone.utc).isoformat()
+            for question in questions_data:
+                question['created_at'] = now
+                question['updated_at'] = now
                 
-            result = self.supabase.table('multiple_choice_questions').insert(questions).execute()
+            # Insert all questions in one batch
+            result = self.supabase.table('multiple_choice_questions').insert(questions_data).execute()
             return result.data if result.data else []
             
         except Exception as e:
@@ -513,6 +518,119 @@ class SupabaseManager:
             
         except Exception as e:
             print(f"Error getting multiple choice questions: {e}")
+            return []
+
+    def create_test(self, category: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Create a new test record
+        
+        Args:
+            category: Optional category for the test
+            
+        Returns:
+            Created test record if successful, None otherwise
+        """
+        try:
+            data = {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "category": category,
+                "score": 0,
+                "total_score": 0
+            }
+            result = self.supabase.table('tests').insert(data).execute()
+            return result.data[0] if result.data else None
+            
+        except Exception as e:
+            print(f"Error creating test: {e}")
+            return None
+
+    def update_test_scores(self, test_id: int, score: int, total_score: int) -> Optional[Dict[str, Any]]:
+        """
+        Update the scores for a test
+        
+        Args:
+            test_id: ID of the test to update
+            score: Current score achieved
+            total_score: Total possible score
+            
+        Returns:
+            Updated test record or None if failed
+        """
+        try:
+            result = self.supabase.table('tests')\
+                .update({
+                    "score": score,
+                    "total_score": total_score,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                })\
+                .eq('id', test_id)\
+                .execute()
+            return result.data[0] if result.data else None
+            
+        except Exception as e:
+            print(f"Error updating test scores: {e}")
+            return None
+
+    def get_latest_tests(self, limit: int = 10, category: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get the latest tests with their scores
+        
+        Args:
+            limit: Maximum number of tests to return
+            category: Optional category to filter by
+            
+        Returns:
+            List of test records ordered by creation date
+        """
+        try:
+            query = self.supabase.table('tests')\
+                .select('*')\
+                .order('created_at', desc=True)\
+                .limit(limit)
+            
+            if category:
+                query = query.eq('category', category)
+                
+            result = query.execute()
+            return result.data if result.data else []
+            
+        except Exception as e:
+            print(f"Error getting latest tests: {e}")
+            return []
+
+    def get_random_knowledge_items(self, count: int, main_category: Optional[str] = None, sub_category: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get random knowledge items from the database
+        
+        Args:
+            count: Number of items to return
+            main_category: Optional main category to filter by
+            sub_category: Optional sub category to filter by
+            
+        Returns:
+            List of knowledge items
+        """
+        try:
+            # Build query with filters
+            query = self.supabase.table('knowledge_items').select('*')
+            
+            if main_category:
+                query = query.filter('main_category', 'eq', main_category)
+            if sub_category:
+                query = query.filter('sub_category', 'eq', sub_category)
+            
+            # Get all matching items first
+            result = query.execute()
+            if not result.data:
+                return []
+            
+            # Randomly select 'count' items
+            items = random.sample(result.data, min(count, len(result.data)))
+            return items
+            
+        except Exception as e:
+            print(f"Error getting random knowledge: {e}")
             return []
 
 # Create global instance

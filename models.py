@@ -13,28 +13,22 @@ class QuestionType(str, Enum):
     FREE_TEXT = "free_text"
 
 class Question(BaseModel):
-    """Question model for self-test feature"""
+    """Model for a generated question"""
     question_text: str = Field(..., description="The question text")
-    main_category: str = Field(..., description="Main knowledge category")
-    sub_category: str = Field(..., description="Sub category within the main category")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-    answer: str = Field("", description="The answer to evaluate (empty for question generation)")
-    question_type: QuestionType = Field(default=QuestionType.FREE_TEXT, description="Type of question (multiple choice or free text)")
+    knowledge_id: int = Field(..., description="ID of the knowledge item this question is based on")
+    knowledge_content: str = Field(..., description="Content of the knowledge item")
+    main_category: str = Field(..., description="Main category of the knowledge")
+    sub_category: str = Field(..., description="Sub category of the knowledge")
 
 class MultipleChoiceQuestion(BaseModel):
-    """Internal model for multiple choice questions with all fields"""
-    question_id: int = Field(..., description="Database ID of the question")
+    """Model for a generated multiple choice question"""
     question_text: str = Field(..., description="The question text")
-    options: List[str] = Field(..., description="List of 4 options (indexed 0-3)")
-    correct_answer_index: int = Field(..., ge=0, le=3, description="Index of correct answer (0-3)")
-    explanation: str = Field(..., description="Explanation of correct answer and distractors")
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
-
-    @validator('options')
-    def validate_options(cls, v):
-        if len(v) != 4:
-            raise ValueError('Must have exactly 4 options')
-        return v
+    options: List[str] = Field(..., description="List of answer options")
+    knowledge_id: int = Field(..., description="ID of the knowledge item this question is based on")
+    knowledge_content: str = Field(..., description="Content of the knowledge item")
+    main_category: str = Field(..., description="Main category of the knowledge")
+    sub_category: str = Field(..., description="Sub category of the knowledge")
+    question_id: int = Field(..., description="ID of the stored question in the database")
 
 class MultipleChoiceQuestionResponse(BaseModel):
     """Response model for multiple choice questions"""
@@ -48,28 +42,32 @@ class MultipleChoiceQuestionResponse(BaseModel):
 
 class GenerateQuestionsResponse(BaseModel):
     """Response model for question generation"""
-    questions: List[Question] = Field(..., description="List of generated questions")
-    total_questions: int = Field(..., description="Total number of questions generated")
+    questions: List[Question]
+    total_questions: int
+    test_id: int = Field(..., description="ID of the test these questions belong to")
 
 class GenerateMultipleChoiceResponse(BaseModel):
     """Response model for multiple choice question generation"""
-    questions: List[MultipleChoiceQuestionResponse] = Field(..., description="List of generated multiple choice questions")
-    total_questions: int = Field(..., description="Total number of questions generated")
+    questions: List[MultipleChoiceQuestion]
+    total_questions: int
+    test_id: int = Field(..., description="ID of the test these questions belong to")
 
 class AnswerRequest(BaseModel):
-    """Request model for submitting an answer"""
-    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item")
-    question_text: str = Field(..., min_length=1, description="The question being answered")
-    answer: str = Field(..., min_length=1, description="The user's answer to evaluate")
+    """Request model for evaluating a single answer"""
+    question_text: str = Field(..., description="The question text")
+    answer: str = Field(..., description="The answer to evaluate")
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
 
 class MultipleChoiceAnswerRequest(BaseModel):
-    """Request model for submitting a multiple choice answer"""
+    """Request model for evaluating a single multiple choice answer"""
     question_id: int = Field(..., gt=0, description="ID of the multiple choice question")
-    selected_answer_index: int = Field(..., ge=0, le=3, description="Index of selected option (0-3)")
+    selected_index: int = Field(..., ge=0, le=3, description="Index of the selected answer (0-3)")
+    knowledge_id: int = Field(..., gt=0, description="ID of the knowledge item this question is based on")
 
 class MultipleChoiceBatchAnswerRequest(BaseModel):
-    """Request model for submitting multiple multiple choice answers"""
-    answers: List[MultipleChoiceAnswerRequest] = Field(..., description="List of answers to evaluate")
+    """Request model for batch multiple choice answer evaluation"""
+    answers: List[MultipleChoiceAnswerRequest]
+    test_id: Optional[int] = Field(None, description="ID of the test these answers belong to")
 
 class EvaluationResponse(BaseModel):
     """Response model for evaluation results"""
@@ -96,13 +94,15 @@ class EvaluationResponse(BaseModel):
     correct_answer_index: Optional[int] = None
 
 class BatchAnswerRequest(BaseModel):
-    """Request model for submitting multiple answers"""
-    answers: List[AnswerRequest] = Field(..., description="List of answers to evaluate")
+    """Request model for batch answer evaluation"""
+    answers: List[AnswerRequest]
+    test_id: Optional[int] = Field(None, description="ID of the test these answers belong to")
 
 class BatchEvaluationResponse(BaseModel):
     """Response model for batch answer evaluation"""
-    evaluations: List[EvaluationResponse] = Field(..., description="List of evaluations for each answer")
-    total_evaluated: int = Field(..., description="Total number of answers evaluated")
+    evaluations: List[EvaluationResponse]
+    total_evaluated: int
+    test_id: Optional[int] = Field(None, description="ID of the test these evaluations belong to")
 
 class EvaluationGroupResponse(BaseModel):
     """Response model for grouped evaluations"""
@@ -257,8 +257,32 @@ class MultipleChoiceEvaluationDetail(BaseModel):
     correct_answer_index: int
     is_correct: bool
     feedback: str
+    evaluation_id: int
+    knowledge_id: int
+    multiple_choice_question_id: int
+    mastery: float
+    previous_mastery: float
+    mastery_explanation: str
+    main_category: str
+    sub_category: str
 
 class MultipleChoiceBatchEvaluationResponse(BaseModel):
-    """Response model for batch multiple choice answer evaluation"""
-    evaluations: List[EvaluationResponse]
+    """Response model for batch multiple choice evaluation"""
+    evaluations: List[MultipleChoiceEvaluationDetail]
     total_evaluated: int
+    test_id: Optional[int] = Field(None, description="ID of the test these evaluations belong to")
+
+class TestResponse(BaseModel):
+    """Response model for a single test"""
+    id: int = Field(..., description="Test ID")
+    category: str = Field(..., description="Test category")
+    score: int = Field(..., description="Score achieved")
+    total_score: int = Field(..., description="Total possible score")
+    percentage: float = Field(..., description="Percentage score")
+    created_at: datetime = Field(..., description="When the test was created")
+    updated_at: datetime = Field(..., description="When the test was last updated")
+
+class TestListResponse(BaseModel):
+    """Response model for list of tests"""
+    tests: List[TestResponse] = Field(..., description="List of tests")
+    total_tests: int = Field(..., description="Total number of tests returned")
