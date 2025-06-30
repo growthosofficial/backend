@@ -17,7 +17,7 @@ fi
 mkdir -p logs uploads tmp/prompts
 
 # Install dependencies if requirements.txt is newer than last install
-if [ requirements.txt -nt .last_install ] || [ ! -f .last_install ]; then
+if [ "requirements.txt" -nt ".last_install" ] || [ ! -f ".last_install" ]; then
     echo "📦 Installing Python dependencies..."
     pip install -r requirements.txt
     touch .last_install
